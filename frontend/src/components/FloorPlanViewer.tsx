@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { FloorData, PlanData, RoomData } from "../api/types";
 import { furnitureIconMarkup } from "./furnitureIcons";
-import { bikeIconMarkup, carIconMarkup, treeIconMarkup } from "./siteIcons";
+import { bikeIconMarkup, carIconMarkup, shrubIconMarkup, treeIconMarkup } from "./siteIcons";
 import "./floor-plan-viewer.css";
 
 const CATEGORY: Record<string, "social" | "sleep" | "wet"> = {
@@ -83,6 +83,24 @@ function buildFloorSvg(floor: FloorData, plotLength: number, plotWidth: number):
   if (isGroundFloor) {
     svg += `<rect x="${plot.x}" y="${plot.y}" width="${plot.w}" height="${plot.l}" fill="var(--garden)" stroke="var(--line-soft)" stroke-width="${unit * 0.06}" stroke-dasharray="${unit * 0.3} ${unit * 0.25}" />`;
 
+    // subtle grass-blade texture across the whole yard
+    svg += `<defs><pattern id="grassTexture" width="${unit * 1.2}" height="${unit * 1.2}" patternUnits="userSpaceOnUse">
+      <line x1="0" y1="${unit * 1.2}" x2="${unit * 0.3}" y2="${unit * 0.6}" stroke="var(--garden-canopy)" stroke-width="${unit * 0.06}" opacity="0.35" />
+      <line x1="${unit * 0.6}" y1="${unit * 1.2}" x2="${unit * 0.9}" y2="${unit * 0.6}" stroke="var(--garden-canopy)" stroke-width="${unit * 0.06}" opacity="0.35" />
+    </pattern></defs>`;
+    svg += `<rect x="${plot.x}" y="${plot.y}" width="${plot.w}" height="${plot.l}" fill="url(#grassTexture)" />`;
+
+    // a paved walkway from the main gate to the entrance door, if both exist
+    const entranceDoor = floor.doors.find((d) => d.type === "main_entrance");
+    if (floor.main_gate && entranceDoor) {
+      const g = floor.main_gate;
+      const gx = g.side === "north" || g.side === "south" ? g.x + g.width / 2 : g.x;
+      const gy = g.side === "east" || g.side === "west" ? g.y + g.width / 2 : g.y;
+      const pathW = unit * 2.2;
+      svg += `<line x1="${gx}" y1="${gy}" x2="${entranceDoor.center_x}" y2="${entranceDoor.center_y}" stroke="var(--stone)" stroke-width="${pathW}" stroke-linecap="round" />`;
+      svg += `<line x1="${gx}" y1="${gy}" x2="${entranceDoor.center_x}" y2="${entranceDoor.center_y}" stroke="var(--stone-dark)" stroke-width="${unit * 0.1}" stroke-dasharray="${unit * 0.5} ${unit * 0.9}" />`;
+    }
+
     // scatter trees around the perimeter gap, skipping anywhere that falls
     // inside the building outline or the parking rect
     const insideBuilding = (x: number, y: number) =>
@@ -114,7 +132,10 @@ function buildFloorSvg(floor: FloorData, plotLength: number, plotWidth: number):
           const ty = plot.y + pad + (iy / rows) * innerL;
           if (insideBuilding(tx, ty) || insideParking(tx, ty)) continue;
           seed++;
-          svg += `<g transform="translate(${tx - treeSize / 2} ${ty - treeSize / 2}) scale(${treeSize} ${treeSize})" stroke-width="${unit * 0.06}">${treeIconMarkup(seed)}</g>`;
+          const isShrub = seed % 3 === 0;
+          const iconSize = isShrub ? treeSize * 0.65 : treeSize;
+          const icon = isShrub ? shrubIconMarkup(seed) : treeIconMarkup(seed);
+          svg += `<g transform="translate(${tx - iconSize / 2} ${ty - iconSize / 2}) scale(${iconSize} ${iconSize})" stroke-width="${unit * 0.06}">${icon}</g>`;
         }
       }
     }
@@ -142,12 +163,23 @@ function buildFloorSvg(floor: FloorData, plotLength: number, plotWidth: number):
       const cross = horiz ? p.length : p.width;
       const slotSize = along / totalSlots;
       let idx = 0;
+      // Icons are drawn front-to-back along their own local Y axis, side-to-side
+      // along local X (see carIconMarkup/bikeIconMarkup). A parking slot is a
+      // slotSize x cross rectangle, not a square, so scale each axis
+      // independently instead of forcing a Math.min(...) square -- that was
+      // shrinking every vehicle down to whichever dimension was smaller,
+      // leaving it stranded in the middle of its slot looking half-sized.
+      // When slots stack vertically (horiz false) the vehicle's natural
+      // front-to-back axis needs to run along the real X axis instead, so the
+      // whole icon is rotated 90 degrees in place around its own center.
       const placeIcon = (markup: string, marginFrac: number) => {
         const center = idx * slotSize + slotSize / 2;
-        const size = Math.min(slotSize, cross) * (1 - marginFrac * 2);
+        const w = slotSize * (1 - marginFrac * 2);
+        const h = cross * (1 - marginFrac * 2);
         const cx = horiz ? p.x + center : p.x + cross / 2;
         const cy = horiz ? p.y + cross / 2 : p.y + center;
-        svg += `<g transform="translate(${cx - size / 2} ${cy - size / 2}) scale(${size} ${size})" stroke-width="${unit * 0.06}">${markup}</g>`;
+        const rotate = horiz ? "" : `rotate(90 ${cx} ${cy}) `;
+        svg += `<g transform="${rotate}translate(${cx - w / 2} ${cy - h / 2}) scale(${w} ${h})" stroke-width="${unit * 0.06}">${markup}</g>`;
         idx++;
       };
       for (let i = 0; i < p.capacity_cars; i++) placeIcon(carIconMarkup(i + 1), 0.08);

@@ -30,32 +30,53 @@ const SURFACE = "var(--surface)";
 
 function sofa(): string {
   return (
-    rect(0.03, 0.03, 0.94, 0.94, FABRIC, 0.06) +
-    rect(0.03, 0.03, 0.94, 0.24, "var(--fabric-dark)") + // backrest
-    rect(0.03, 0.03, 0.16, 0.94, "var(--fabric-dark)") + // left arm
-    rect(0.81, 0.03, 0.16, 0.94, "var(--fabric-dark)") + // right arm
-    line(0.36, 0.27, 0.36, 0.97) +
-    line(0.63, 0.27, 0.63, 0.97)
+    rect(0.03, 0.03, 0.94, 0.94, FABRIC, 0.1) +
+    rect(0.03, 0.03, 0.94, 0.22, "var(--fabric-dark)", 0.06) + // backrest
+    rect(0.03, 0.03, 0.15, 0.94, "var(--fabric-dark)", 0.06) + // left arm
+    rect(0.82, 0.03, 0.15, 0.94, "var(--fabric-dark)", 0.06) + // right arm
+    // seat cushion seams
+    line(0.36, 0.25, 0.36, 0.94) +
+    line(0.63, 0.25, 0.63, 0.94) +
+    circle(0.195, 0.14, 0.05, "var(--fabric-dark)") + // scatter cushion accents
+    circle(0.805, 0.14, 0.05, "var(--fabric-dark)")
   );
 }
 function chairIcon(): string {
-  return rect(0.1, 0.25, 0.8, 0.7, FABRIC, 0.08) + rect(0.15, 0.03, 0.7, 0.2, "var(--fabric-dark)");
+  return (
+    rect(0.1, 0.25, 0.8, 0.7, FABRIC, 0.1) +
+    rect(0.15, 0.03, 0.7, 0.2, "var(--fabric-dark)", 0.05) +
+    line(0.32, 0.05, 0.32, 0.21) +
+    line(0.5, 0.05, 0.5, 0.21) +
+    line(0.68, 0.05, 0.68, 0.21)
+  );
 }
 function table(): string {
-  return rect(0.05, 0.05, 0.9, 0.9, WOOD, 0.04) + rect(0.16, 0.16, 0.68, 0.68, "var(--wood-dark)");
+  return (
+    rect(0.05, 0.05, 0.9, 0.9, WOOD, 0.05) +
+    rect(0.14, 0.14, 0.72, 0.72, "var(--wood-dark)", 0.03) +
+    line(0.14, 0.36, 0.86, 0.36) +
+    line(0.14, 0.63, 0.86, 0.63)
+  );
 }
 function tvUnit(): string {
-  return rect(0.02, 0.35, 0.96, 0.3, WOOD) + rect(0.3, 0.05, 0.16, 0.16, "var(--ink-faint)") + rect(0.54, 0.05, 0.16, 0.16, "var(--ink-faint)");
+  return (
+    rect(0.02, 0.4, 0.96, 0.28, WOOD, 0.03) +
+    rect(0.08, 0.44, 0.35, 0.06, "var(--wood-dark)") +
+    rect(0.57, 0.44, 0.35, 0.06, "var(--wood-dark)") +
+    rect(0.22, 0.03, 0.56, 0.3, "var(--ink)", 0.02) + // wall-mounted screen, drawn above the unit
+    rect(0.26, 0.07, 0.48, 0.22, "var(--ink-faint)")
+  );
 }
 function bed(pillows: number): string {
-  let s = rect(0.03, 0.03, 0.94, 0.94, FABRIC, 0.05);
+  let s = rect(0.03, 0.03, 0.94, 0.94, FABRIC, 0.06);
+  s += rect(0.03, 0.0, 0.94, 0.08, WOOD, 0.02); // headboard
   const pw = pillows === 1 ? 0.5 : 0.38;
   if (pillows === 1) {
-    s += rect((1 - pw) / 2, 0.08, pw, 0.22, SURFACE, 0.04);
+    s += rect((1 - pw) / 2, 0.12, pw, 0.2, SURFACE, 0.04);
   } else {
-    s += rect(0.08, 0.08, pw, 0.22, SURFACE, 0.04) + rect(1 - 0.08 - pw, 0.08, pw, 0.22, SURFACE, 0.04);
+    s += rect(0.08, 0.12, pw, 0.2, SURFACE, 0.04) + rect(1 - 0.08 - pw, 0.12, pw, 0.2, SURFACE, 0.04);
   }
-  s += `<rect x="0.06" y="0.38" width="0.88" height="0.56" rx="0.03" fill="var(--fabric-dark)" ${S} />`;
+  s += `<rect x="0.06" y="0.4" width="0.88" height="0.54" rx="0.03" fill="var(--fabric-dark)" ${S} />`;
   s += line(0.08, 0.78, 0.92, 0.78); // foot fold
   return s;
 }
@@ -64,7 +85,9 @@ function wardrobe(): string {
     rect(0.03, 0.03, 0.94, 0.94, WOOD) +
     line(0.5, 0.03, 0.5, 0.97) +
     line(0.15, 0.03, 0.3, 0.15) +
-    line(0.85, 0.03, 0.7, 0.15)
+    line(0.85, 0.03, 0.7, 0.15) +
+    circle(0.44, 0.5, 0.025, "var(--wood-dark)") + // door handles
+    circle(0.56, 0.5, 0.025, "var(--wood-dark)")
   );
 }
 function dresser(): string {
@@ -98,12 +121,16 @@ function fridge(): string {
   return rect(0.05, 0.03, 0.9, 0.94, STONE, 0.04) + line(0.05, 0.42, 0.95, 0.42) + line(0.85, 0.5, 0.85, 0.62);
 }
 function diningTable(seats: number): string {
-  let s = ellipse(0.5, 0.5, 0.46, 0.44, WOOD);
-  const perSide = Math.max(1, Math.round(seats / 2));
-  for (let i = 0; i < perSide; i++) {
-    const cx = (i + 1) / (perSide + 1);
-    s += rect(cx - 0.06, -0.12, 0.12, 0.12, FABRIC);
-    s += rect(cx - 0.06, 1.0, 0.12, 0.12, FABRIC);
+  let s = ellipse(0.5, 0.5, 0.38, 0.34, WOOD) + ellipse(0.5, 0.5, 0.28, 0.24, "var(--wood-dark)");
+  const chairSize = 0.16;
+  for (let i = 0; i < seats; i++) {
+    const angle = (i / seats) * Math.PI * 2 - Math.PI / 2;
+    const cx = 0.5 + (0.38 + chairSize * 0.75) * Math.cos(angle);
+    const cy = 0.5 + (0.34 + chairSize * 0.75) * Math.sin(angle);
+    const deg = (angle * 180) / Math.PI + 90;
+    s += `<g transform="rotate(${deg.toFixed(1)} ${cx.toFixed(3)} ${cy.toFixed(3)})">` +
+      rect(cx - chairSize / 2, cy - chairSize / 2, chairSize, chairSize, FABRIC, 0.03) +
+      `</g>`;
   }
   return s;
 }
