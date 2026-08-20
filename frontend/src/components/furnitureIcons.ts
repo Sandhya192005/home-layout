@@ -124,6 +124,10 @@ function washBasin(): string {
 function showerIcon(): string {
   return rect(0.03, 0.03, 0.94, 0.94, WATER) + line(0.15, 0.15, 0.85, 0.85) + line(0.85, 0.15, 0.15, 0.85) + circle(0.5, 0.5, 0.08, SURFACE);
 }
+function grabBar(): string {
+  // wall-mounted accessibility grab bar: a bar with two mounting posts
+  return line(0.05, 0.5, 0.95, 0.5) + circle(0.08, 0.5, 0.09, "var(--ink-faint)") + circle(0.92, 0.5, 0.09, "var(--ink-faint)");
+}
 function washingMachine(): string {
   return rect(0.05, 0.05, 0.9, 0.9, STONE, 0.06) + circle(0.5, 0.55, 0.28, "var(--water)");
 }
@@ -180,6 +184,7 @@ const ICONS: Record<string, () => string> = {
   wc: wc,
   wash_basin: washBasin,
   shower: showerIcon,
+  grab_bar: grabBar,
   washing_machine: washingMachine,
   planters: planters,
   equipment_rack: equipmentRack,

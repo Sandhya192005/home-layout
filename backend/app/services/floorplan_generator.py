@@ -31,6 +31,9 @@ from app.utils.constants import (
     CAR_PARKING_SIZE,
     DOOR_WIDTH_INTERNAL,
     DOOR_WIDTH_MAIN,
+    MAIN_GATE_WIDTH,
+    RAMP_LENGTH,
+    RAMP_WIDTH,
     ROOM_LIBRARY,
     SETBACK_RULES,
     TWO_WHEELER_PARKING_SIZE,
@@ -152,8 +155,9 @@ def build_room_program(req: RequirementCreate) -> list[RoomInstance]:
     if floors == 1:
         for i, btype in enumerate(bedroom_types):
             rooms.append(_make_room(btype, 0, nxt()))
-        for _ in range(total_bathrooms):
-            rooms.append(_make_room("bathroom", 0, nxt()))
+        for i in range(total_bathrooms):
+            bath_type = "accessible_bathroom" if (req.wheelchair_accessible and i == 0) else "bathroom"
+            rooms.append(_make_room(bath_type, 0, nxt()))
         if req.has_study_room:
             rooms.append(_make_room("study_room", 0, nxt()))
         for extra in extra_upper:
@@ -163,7 +167,8 @@ def build_room_program(req: RequirementCreate) -> list[RoomInstance]:
     else:
         upper_floor_count = floors - 1
         # one common bathroom stays on the ground floor
-        rooms.append(_make_room("bathroom", 0, nxt()))
+        ground_bath_type = "accessible_bathroom" if req.wheelchair_accessible else "bathroom"
+        rooms.append(_make_room(ground_bath_type, 0, nxt()))
         remaining_baths = max(total_bathrooms - 1, 0)
 
         # distribute bedrooms round-robin across upper floors (1..floors-1)
@@ -427,6 +432,74 @@ def compute_parking(base_rect: dict, facing: str, front_sb: float, cars: int, tw
 
 
 # ---------------------------------------------------------------------------
+# Wheelchair ramp + main gate
+# ---------------------------------------------------------------------------
+
+_OUTWARD_SHIFT_AXIS = {"north": "x", "south": "x", "west": "y", "east": "y"}
+
+
+def compute_ramp(entrance_door: dict | None, plot: dict, parking: dict | None) -> dict | None:
+    """A ramp running outward from the entrance door, clipped to the plot and
+    nudged sideways (a few tries) if it would overlap the parking rect."""
+    if not entrance_door:
+        return None
+    side = entrance_door["wall"]
+    cx, cy = entrance_door["center_x"], entrance_door["center_y"]
+
+    def rect_for(shift: float) -> dict:
+        if side == "north":
+            length = min(RAMP_LENGTH, cy - plot["y"])
+            return {"x": cx - RAMP_WIDTH / 2 + shift, "y": cy - length, "w": RAMP_WIDTH, "l": length}
+        if side == "south":
+            length = min(RAMP_LENGTH, geo.rect_y2(plot) - cy)
+            return {"x": cx - RAMP_WIDTH / 2 + shift, "y": cy, "w": RAMP_WIDTH, "l": length}
+        if side == "west":
+            length = min(RAMP_LENGTH, cx - plot["x"])
+            return {"x": cx - length, "y": cy - RAMP_WIDTH / 2 + shift, "w": length, "l": RAMP_WIDTH}
+        length = min(RAMP_LENGTH, geo.rect_x2(plot) - cx)
+        return {"x": cx, "y": cy - RAMP_WIDTH / 2 + shift, "w": length, "l": RAMP_WIDTH}
+
+    for shift in (0.0, RAMP_WIDTH + 2, -(RAMP_WIDTH + 2), 2 * (RAMP_WIDTH + 2), -2 * (RAMP_WIDTH + 2)):
+        rect = rect_for(shift)
+        if rect["w"] <= 0.5 or rect["l"] <= 0.5:
+            continue
+        if not (0 <= rect["x"] and geo.rect_x2(rect) <= geo.rect_x2(plot)):
+            continue
+        if not (0 <= rect["y"] and geo.rect_y2(rect) <= geo.rect_y2(plot)):
+            continue
+        if parking and geo.rects_overlap(rect, parking):
+            continue
+        rect["side"] = side
+        return rect
+    return None
+
+
+def compute_main_gate(plot: dict, facing: str, parking: dict | None, entrance_door: dict | None) -> dict:
+    """A driveway gate opening centered on the parking (or the entrance, if
+    there's no parking) along the plot's front boundary."""
+    front_side = _front_edge(facing)
+    axis = _OUTWARD_SHIFT_AXIS[front_side]
+    if parking:
+        center = parking["x"] + parking["w"] / 2 if axis == "x" else parking["y"] + parking["l"] / 2
+    elif entrance_door:
+        center = entrance_door["center_x"] if axis == "x" else entrance_door["center_y"]
+    else:
+        center = plot["w"] / 2 if axis == "x" else plot["l"] / 2
+
+    span = plot["w"] if axis == "x" else plot["l"]
+    width = min(MAIN_GATE_WIDTH, span)
+    start = min(max(center - width / 2, 0.0), span - width)
+
+    if front_side == "north":
+        return {"x": start, "y": plot["y"], "width": width, "side": "north"}
+    if front_side == "south":
+        return {"x": start, "y": geo.rect_y2(plot), "width": width, "side": "south"}
+    if front_side == "west":
+        return {"x": plot["x"], "y": start, "width": width, "side": "west"}
+    return {"x": geo.rect_x2(plot), "y": start, "width": width, "side": "east"}
+
+
+# ---------------------------------------------------------------------------
 # Walls, doors, windows, furniture
 # ---------------------------------------------------------------------------
 
@@ -605,6 +678,15 @@ def generate_floor_plan(req: RequirementCreate) -> dict:
         doors = _build_doors(all_placed, floor_outline, req.facing, entrance_id)
         walls = _build_walls(floor_outline, room_dicts)
 
+        ramp = None
+        main_gate = None
+        if floor_idx == 0:
+            entrance_door = next((d for d in doors if d["type"] == "main_entrance"), None)
+            plot_rect = {"x": 0.0, "y": 0.0, "w": req.plot_width, "l": req.plot_length}
+            if req.wheelchair_accessible:
+                ramp = compute_ramp(entrance_door, plot_rect, parking)
+            main_gate = compute_main_gate(plot_rect, req.facing, parking, entrance_door)
+
         for rd in room_dicts:
             rd.pop("rect", None)
 
@@ -622,6 +704,14 @@ def generate_floor_plan(req: RequirementCreate) -> dict:
                 "width": round(parking["w"], 2), "length": round(parking["l"], 2),
                 "capacity_cars": parking["capacity_cars"], "capacity_two_wheelers": parking["capacity_two_wheelers"],
             } if parking else None,
+            "ramp": {
+                "x": round(ramp["x"], 2), "y": round(ramp["y"], 2),
+                "width": round(ramp["w"], 2), "length": round(ramp["l"], 2), "side": ramp["side"],
+            } if ramp else None,
+            "main_gate": {
+                "x": round(main_gate["x"], 2), "y": round(main_gate["y"], 2),
+                "width": round(main_gate["width"], 2), "side": main_gate["side"],
+            } if main_gate else None,
             "has_staircase": stair_room is not None,
         })
 

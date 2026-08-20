@@ -51,6 +51,9 @@ def _room_program(req: RequirementCreate) -> dict[str, int]:
     if req.bedrooms > 1:
         counts["bedroom"] = req.bedrooms - 1
     counts["bathroom"] = req.bathrooms
+    if req.wheelchair_accessible and counts["bathroom"] > 0:
+        counts["bathroom"] -= 1
+        counts["accessible_bathroom"] = 1
     counts["kitchen"] = 1
     if req.has_living_room:
         counts["living_room"] = 1

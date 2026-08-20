@@ -54,6 +54,7 @@ export interface RequirementInput {
   floors: number;
   budget: number;
   vastu_compliant: boolean;
+  wheelchair_accessible: boolean;
   additional_rooms: AdditionalRoomType[];
   other_requirements: string | null;
 }
@@ -124,6 +125,21 @@ export interface ParkingData {
   capacity_two_wheelers: number;
 }
 
+export interface RampData {
+  x: number;
+  y: number;
+  width: number;
+  length: number;
+  side: "north" | "south" | "east" | "west";
+}
+
+export interface MainGateData {
+  x: number;
+  y: number;
+  width: number;
+  side: "north" | "south" | "east" | "west";
+}
+
 export interface FloorData {
   floor_number: number;
   label: string;
@@ -133,6 +149,8 @@ export interface FloorData {
   doors: DoorData[];
   windows: WindowData[];
   parking: ParkingData | null;
+  ramp: RampData | null;
+  main_gate: MainGateData | null;
   has_staircase: boolean;
 }
 

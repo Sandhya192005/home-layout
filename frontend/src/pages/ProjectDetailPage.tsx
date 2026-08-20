@@ -24,6 +24,7 @@ const DEFAULT_REQUIREMENT: RequirementInput = {
   floors: 1,
   budget: 3500000,
   vastu_compliant: false,
+  wheelchair_accessible: false,
   additional_rooms: [],
   other_requirements: null,
 };
@@ -224,6 +225,14 @@ export default function ProjectDetailPage() {
             <label className="checkbox-row">
               <input type="checkbox" checked={form.vastu_compliant} onChange={(e) => update("vastu_compliant", e.target.checked)} />
               Vastu compliant
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={form.wheelchair_accessible}
+                onChange={(e) => update("wheelchair_accessible", e.target.checked)}
+              />
+              Wheelchair accessible
             </label>
           </div>
 

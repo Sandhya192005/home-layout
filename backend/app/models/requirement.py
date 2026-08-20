@@ -39,6 +39,7 @@ class Requirement(Base, AuditMixin):
 
     # Preferences
     vastu_compliant: Mapped[bool] = mapped_column(Boolean, default=False)
+    wheelchair_accessible: Mapped[bool] = mapped_column(Boolean, default=False)
     additional_rooms: Mapped[list] = mapped_column(JSON, default=list)  # e.g. ["home_office", "servant_room"]
     other_requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
 

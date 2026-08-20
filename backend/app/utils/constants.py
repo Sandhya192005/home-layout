@@ -89,6 +89,17 @@ ROOM_LIBRARY = {
             {"type": "shower", "w": 3, "l": 3},
         ],
     },
+    "accessible_bathroom": {
+        # sized for a ~5ft wheelchair turning circle, unlike the standard bathroom
+        "label": "Accessible Bathroom", "weight": 0.42, "priority": 6, "min_w": 6, "min_l": 9,
+        "zones": ["NW", "W", "S", "N"], "habitable": False,
+        "furniture": [
+            {"type": "wc", "w": 1.5, "l": 2},
+            {"type": "wash_basin", "w": 2, "l": 1.5},
+            {"type": "shower", "w": 3.5, "l": 3.5},
+            {"type": "grab_bar", "w": 2, "l": 0.5},
+        ],
+    },
     "utility": {
         "label": "Utility Room", "weight": 0.3, "priority": 3, "min_w": 5, "min_l": 7,
         "zones": ["NW", "S", "W"], "habitable": False,
@@ -142,6 +153,13 @@ ROOM_LIBRARY = {
 # Approximate open-parking footprint per vehicle (feet)
 CAR_PARKING_SIZE = {"w": 9.0, "l": 17.0}
 TWO_WHEELER_PARKING_SIZE = {"w": 3.5, "l": 7.0}
+
+# Wheelchair ramp footprint at the main entrance (feet)
+RAMP_WIDTH = 4.0
+RAMP_LENGTH = 8.0
+
+# Driveway gate opening at the plot boundary (feet)
+MAIN_GATE_WIDTH = 10.0
 
 WALL_THICKNESS_EXTERIOR = 0.75  # 9 inch
 WALL_THICKNESS_INTERIOR = 0.42  # 5 inch

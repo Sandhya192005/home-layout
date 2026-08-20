@@ -28,6 +28,7 @@ class RequirementBase(BaseModel):
     budget: float = Field(default=0, ge=0)
 
     vastu_compliant: bool = False
+    wheelchair_accessible: bool = False
     additional_rooms: list[str] = Field(default_factory=list)
     other_requirements: str | None = None
 

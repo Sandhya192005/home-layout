@@ -162,6 +162,14 @@ def on_boundary(rect: dict, outline: dict) -> list[str]:
     return sides
 
 
+def rects_overlap(a: dict, b: dict) -> bool:
+    """True if rects `a` and `b` overlap by more than a sliver (touching edges don't count)."""
+    return (
+        a["x"] < rect_x2(b) - EPS and rect_x2(a) > b["x"] + EPS and
+        a["y"] < rect_y2(b) - EPS and rect_y2(a) > b["y"] + EPS
+    )
+
+
 def segment_length(seg: tuple[float, float, float, float]) -> float:
     x1, y1, x2, y2 = seg
     return ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5

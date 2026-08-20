@@ -13,6 +13,7 @@ const CATEGORY: Record<string, "social" | "sleep" | "wet"> = {
   guest_room: "sleep",
   kitchen: "wet",
   bathroom: "wet",
+  accessible_bathroom: "wet",
   utility: "wet",
 };
 const CATEGORY_LABEL: Record<string, string> = {
@@ -153,6 +154,31 @@ function buildFloorSvg(floor: FloorData, plotLength: number, plotWidth: number):
       for (let i = 0; i < p.capacity_two_wheelers; i++) placeIcon(bikeIconMarkup(), 0.18);
     }
     svg += `<text x="${p.x + p.width / 2}" y="${p.y - unit * 0.6}" text-anchor="middle" class="room-dim" font-size="${unit * 1.4}">PARKING</text>`;
+  }
+
+  if (floor.ramp) {
+    const rp = floor.ramp;
+    svg += `<defs><pattern id="rampHatch" width="${unit * 0.9}" height="${unit * 0.9}" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+      <line x1="0" y1="0" x2="0" y2="${unit * 0.9}" stroke="var(--wood-dark)" stroke-width="${unit * 0.18}" />
+    </pattern></defs>`;
+    svg += `<rect x="${rp.x}" y="${rp.y}" width="${rp.width}" height="${rp.length}" fill="url(#rampHatch)" stroke="var(--wood-dark)" stroke-width="${unit * 0.08}" />`;
+    const rlx = rp.x + rp.width / 2;
+    const rly = rp.side === "north" ? rp.y - unit * 0.5 : rp.y + rp.length + unit * 1.3;
+    svg += `<text x="${rlx}" y="${rly}" text-anchor="middle" class="room-dim" font-size="${unit * 1.1}">RAMP</text>`;
+  }
+
+  if (floor.main_gate) {
+    const g = floor.main_gate;
+    const horiz = g.side === "north" || g.side === "south";
+    const x1 = g.x, y1 = g.y;
+    const x2 = horiz ? g.x + g.width : g.x;
+    const y2 = horiz ? g.y : g.y + g.width;
+    const labelDX = horiz ? 0 : g.side === "west" ? -unit * 2.4 : unit * 2.4;
+    const labelDY = horiz ? (g.side === "north" ? -unit * 1.6 : unit * 2.6) : 0;
+    svg += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--warm)" stroke-width="${unit * 0.35}" />`;
+    svg += `<circle cx="${x1}" cy="${y1}" r="${unit * 0.35}" fill="var(--wall)" />`;
+    svg += `<circle cx="${x2}" cy="${y2}" r="${unit * 0.35}" fill="var(--wall)" />`;
+    svg += `<text x="${(x1 + x2) / 2 + labelDX}" y="${(y1 + y2) / 2 + labelDY}" text-anchor="middle" class="room-dim" font-size="${unit * 1.1}">MAIN GATE</text>`;
   }
 
   for (const r of floor.rooms) {
@@ -407,6 +433,23 @@ export default function FloorPlanViewer({ plan }: { plan: PlanData }) {
                 <line x1="18" y1="1" x2="18" y2="9" stroke="var(--accent)" strokeWidth="1.5" />
               </svg>
               Window
+            </div>
+            <div className="legend-item">
+              <svg className="legend-line" viewBox="0 0 24 10">
+                <rect x="1" y="1" width="22" height="8" fill="none" stroke="var(--wood-dark)" strokeWidth="1" />
+                <line x1="3" y1="9" x2="9" y2="1" stroke="var(--wood-dark)" strokeWidth="1" />
+                <line x1="9" y1="9" x2="15" y2="1" stroke="var(--wood-dark)" strokeWidth="1" />
+                <line x1="15" y1="9" x2="21" y2="1" stroke="var(--wood-dark)" strokeWidth="1" />
+              </svg>
+              Ramp
+            </div>
+            <div className="legend-item">
+              <svg className="legend-line" viewBox="0 0 24 10">
+                <line x1="1" y1="5" x2="23" y2="5" stroke="var(--warm)" strokeWidth="3" />
+                <circle cx="1" cy="5" r="2" fill="var(--wall)" />
+                <circle cx="23" cy="5" r="2" fill="var(--wall)" />
+              </svg>
+              Main gate
             </div>
           </div>
         </div>
