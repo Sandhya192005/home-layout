@@ -46,6 +46,16 @@ from app.utils.constants import (
 
 FALLBACK_ZONE_ORDER = ["C", "N", "S", "E", "W", "NE", "NW", "SE", "SW"]
 STAIRCASE_WIDTH = 5.0
+ENTRANCE_ROOM_TYPES = ("veranda", "foyer")
+
+# whichever compass edge the plot faces is where the street (and therefore
+# the entrance room) has to sit, regardless of Vastu preference
+FRONT_ZONES_BY_FACING = {
+    "north": ["N", "NE", "NW"],
+    "south": ["S", "SE", "SW"],
+    "east": ["E", "NE", "SE"],
+    "west": ["W", "NW", "SW"],
+}
 
 
 @dataclass
@@ -128,7 +138,9 @@ def build_room_program(req: RequirementCreate) -> list[RoomInstance]:
         return seq
 
     # Ground floor common rooms
-    rooms.append(_make_room("foyer", 0, nxt()))
+    entrance_room = _make_room(req.entrance_type, 0, nxt())
+    entrance_room.zones = FRONT_ZONES_BY_FACING[req.facing]
+    rooms.append(entrance_room)
     if req.has_living_room:
         rooms.append(_make_room("living_room", 0, nxt()))
     if req.has_dining_room:
@@ -227,7 +239,11 @@ def _assign_zones(rooms: list[RoomInstance], vastu: bool) -> dict[tuple[int, int
 
     ordered = sorted(rooms, key=lambda r: (-r.priority, -r.weight))
     for room in ordered:
-        preference = room.zones if vastu else FALLBACK_ZONE_ORDER
+        # the entrance room (veranda/foyer) must sit on the street-facing side
+        # regardless of Vastu preference -- everything else keeps the existing
+        # functional fallback order when Vastu isn't requested
+        is_entrance = room.room_type in ENTRANCE_ROOM_TYPES
+        preference = room.zones if (vastu or is_entrance) else FALLBACK_ZONE_ORDER
         candidates = [ZONE_CELL[z] for z in preference if z in ZONE_CELL]
         if not candidates:
             candidates = list(cell_weight.keys())
@@ -672,7 +688,7 @@ def generate_floor_plan(req: RequirementCreate) -> dict:
         windows = _build_windows(all_placed, floor_outline)
         entrance_id = None
         if floor_idx == 0:
-            entrance_candidates = [r for r in all_placed if r.room_type == "foyer"] or \
+            entrance_candidates = [r for r in all_placed if r.room_type in ENTRANCE_ROOM_TYPES] or \
                 [r for r in all_placed if r.room_type == "living_room"] or all_placed
             entrance_id = entrance_candidates[0].room_id if entrance_candidates else None
         doors = _build_doors(all_placed, floor_outline, req.facing, entrance_id)

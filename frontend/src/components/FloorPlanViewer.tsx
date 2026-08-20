@@ -7,6 +7,7 @@ import "./floor-plan-viewer.css";
 const CATEGORY: Record<string, "social" | "sleep" | "wet"> = {
   living_room: "social",
   dining_room: "social",
+  veranda: "social",
   foyer: "social",
   master_bedroom: "sleep",
   bedroom: "sleep",

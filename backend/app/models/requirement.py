@@ -27,6 +27,7 @@ class Requirement(Base, AuditMixin):
     has_pooja_room: Mapped[bool] = mapped_column(Boolean, default=False)
     has_study_room: Mapped[bool] = mapped_column(Boolean, default=False)
     has_utility_room: Mapped[bool] = mapped_column(Boolean, default=True)
+    entrance_type: Mapped[str] = mapped_column(String(20), default="veranda")
     balconies: Mapped[int] = mapped_column(Integer, default=0)
 
     # Parking

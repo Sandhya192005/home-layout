@@ -144,7 +144,15 @@ ROOM_LIBRARY = {
         "label": "Staircase", "weight": 0.0, "priority": 10, "min_w": 4, "min_l": 10,
         "zones": ["S", "SW", "W"], "habitable": False, "furniture": [],
     },
+    "veranda": {
+        # a covered semi-open entrance porch -- always pinned to whichever
+        # zone actually faces the street (see FRONT_ZONES_BY_FACING)
+        "label": "Veranda", "weight": 0.32, "priority": 7, "min_w": 6, "min_l": 5,
+        "zones": ["N", "NE", "E", "W"], "habitable": False,
+        "furniture": [{"type": "chair", "w": 2, "l": 2}, {"type": "planters", "w": 2, "l": 1}],
+    },
     "foyer": {
+        # an enclosed entrance hall, alternative to veranda -- same front-zone pinning
         "label": "Foyer", "weight": 0.25, "priority": 7, "min_w": 5, "min_l": 5,
         "zones": ["N", "NE", "E", "W"], "habitable": False, "furniture": [],
     },

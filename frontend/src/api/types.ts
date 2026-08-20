@@ -25,6 +25,7 @@ export interface Project extends AuditFields {
 }
 
 export type Facing = "north" | "south" | "east" | "west";
+export type EntranceType = "veranda" | "foyer";
 
 export const ADDITIONAL_ROOM_TYPES = [
   "home_office",
@@ -48,6 +49,7 @@ export interface RequirementInput {
   has_pooja_room: boolean;
   has_study_room: boolean;
   has_utility_room: boolean;
+  entrance_type: EntranceType;
   balconies: number;
   cars: number;
   two_wheelers: number;

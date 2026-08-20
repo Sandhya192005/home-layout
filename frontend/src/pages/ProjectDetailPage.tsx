@@ -18,6 +18,7 @@ const DEFAULT_REQUIREMENT: RequirementInput = {
   has_pooja_room: false,
   has_study_room: false,
   has_utility_room: true,
+  entrance_type: "veranda",
   balconies: 0,
   cars: 1,
   two_wheelers: 1,
@@ -146,6 +147,17 @@ export default function ProjectDetailPage() {
                 <option value="south">South</option>
                 <option value="east">East</option>
                 <option value="west">West</option>
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="entrance_type">Entrance</label>
+              <select
+                id="entrance_type"
+                value={form.entrance_type}
+                onChange={(e) => update("entrance_type", e.target.value as RequirementInput["entrance_type"])}
+              >
+                <option value="veranda">Veranda (covered porch)</option>
+                <option value="foyer">Foyer (enclosed hall)</option>
               </select>
             </div>
           </div>
