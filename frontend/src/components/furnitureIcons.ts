@@ -8,119 +8,124 @@
  */
 
 const S = `stroke="var(--ink-soft)" vector-effect="non-scaling-stroke"`;
-const FILL = `fill="var(--surface)"`;
 
-function rect(x: number, y: number, w: number, h: number, rx = 0) {
-  return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" ${FILL} ${S} />`;
+function rect(x: number, y: number, w: number, h: number, fill: string, rx = 0) {
+  return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" fill="${fill}" ${S} />`;
 }
 function line(x1: number, y1: number, x2: number, y2: number) {
   return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" ${S} />`;
 }
-function circle(cx: number, cy: number, r: number, filled = false) {
-  return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${filled ? "var(--ink-soft)" : "none"}" ${S} />`;
+function circle(cx: number, cy: number, r: number, fill = "none") {
+  return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}" ${S} />`;
 }
-function ellipse(cx: number, cy: number, rx: number, ry: number) {
-  return `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" ${FILL} ${S} />`;
+function ellipse(cx: number, cy: number, rx: number, ry: number, fill: string) {
+  return `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="${fill}" ${S} />`;
 }
+
+const FABRIC = "var(--fabric)";
+const WOOD = "var(--wood)";
+const STONE = "var(--stone)";
+const WATER = "var(--water)";
+const SURFACE = "var(--surface)";
 
 function sofa(): string {
   return (
-    rect(0.03, 0.03, 0.94, 0.94, 0.06) +
-    rect(0.03, 0.03, 0.94, 0.24) + // backrest
-    rect(0.03, 0.03, 0.16, 0.94) + // left arm
-    rect(0.81, 0.03, 0.16, 0.94) + // right arm
+    rect(0.03, 0.03, 0.94, 0.94, FABRIC, 0.06) +
+    rect(0.03, 0.03, 0.94, 0.24, "var(--fabric-dark)") + // backrest
+    rect(0.03, 0.03, 0.16, 0.94, "var(--fabric-dark)") + // left arm
+    rect(0.81, 0.03, 0.16, 0.94, "var(--fabric-dark)") + // right arm
     line(0.36, 0.27, 0.36, 0.97) +
     line(0.63, 0.27, 0.63, 0.97)
   );
 }
 function chairIcon(): string {
-  return rect(0.1, 0.25, 0.8, 0.7, 0.08) + rect(0.15, 0.03, 0.7, 0.2);
+  return rect(0.1, 0.25, 0.8, 0.7, FABRIC, 0.08) + rect(0.15, 0.03, 0.7, 0.2, "var(--fabric-dark)");
 }
 function table(): string {
-  return rect(0.05, 0.05, 0.9, 0.9, 0.04) + rect(0.16, 0.16, 0.68, 0.68);
+  return rect(0.05, 0.05, 0.9, 0.9, WOOD, 0.04) + rect(0.16, 0.16, 0.68, 0.68, "var(--wood-dark)");
 }
 function tvUnit(): string {
-  return rect(0.02, 0.35, 0.96, 0.3) + rect(0.3, 0.05, 0.16, 0.16) + rect(0.54, 0.05, 0.16, 0.16);
+  return rect(0.02, 0.35, 0.96, 0.3, WOOD) + rect(0.3, 0.05, 0.16, 0.16, "var(--ink-faint)") + rect(0.54, 0.05, 0.16, 0.16, "var(--ink-faint)");
 }
 function bed(pillows: number): string {
-  let s = rect(0.03, 0.03, 0.94, 0.94, 0.05);
+  let s = rect(0.03, 0.03, 0.94, 0.94, FABRIC, 0.05);
   const pw = pillows === 1 ? 0.5 : 0.38;
   if (pillows === 1) {
-    s += rect((1 - pw) / 2, 0.08, pw, 0.22, 0.04);
+    s += rect((1 - pw) / 2, 0.08, pw, 0.22, SURFACE, 0.04);
   } else {
-    s += rect(0.08, 0.08, pw, 0.22, 0.04) + rect(1 - 0.08 - pw, 0.08, pw, 0.22, 0.04);
+    s += rect(0.08, 0.08, pw, 0.22, SURFACE, 0.04) + rect(1 - 0.08 - pw, 0.08, pw, 0.22, SURFACE, 0.04);
   }
-  s += line(0.08, 0.38, 0.92, 0.38); // blanket fold
+  s += `<rect x="0.06" y="0.38" width="0.88" height="0.56" rx="0.03" fill="var(--fabric-dark)" ${S} />`;
   s += line(0.08, 0.78, 0.92, 0.78); // foot fold
   return s;
 }
 function wardrobe(): string {
   return (
-    rect(0.03, 0.03, 0.94, 0.94) +
+    rect(0.03, 0.03, 0.94, 0.94, WOOD) +
     line(0.5, 0.03, 0.5, 0.97) +
     line(0.15, 0.03, 0.3, 0.15) +
     line(0.85, 0.03, 0.7, 0.15)
   );
 }
 function dresser(): string {
-  let s = rect(0.03, 0.03, 0.94, 0.94);
+  let s = rect(0.03, 0.03, 0.94, 0.94, WOOD);
   for (const y of [0.27, 0.5, 0.73]) {
     s += line(0.1, y, 0.9, y);
-    s += circle(0.5, y - 0.06, 0.03, true);
+    s += circle(0.5, y - 0.06, 0.03, "var(--wood-dark)");
   }
   return s;
 }
 function counterL(): string {
   // L-shaped counter: full-width strip plus a returning leg
   return (
-    `<path d="M 0.03 0.03 L 0.97 0.03 L 0.97 0.4 L 0.4 0.4 L 0.4 0.97 L 0.03 0.97 Z" ${FILL} ${S} />` +
+    `<path d="M 0.03 0.03 L 0.97 0.03 L 0.97 0.4 L 0.4 0.4 L 0.4 0.97 L 0.03 0.97 Z" fill="${STONE}" ${S} />` +
     line(0.03, 0.2, 0.97, 0.2)
   );
 }
 function sinkIcon(): string {
-  return rect(0.05, 0.15, 0.9, 0.7, 0.05) + ellipse(0.5, 0.5, 0.32, 0.24) + circle(0.5, 0.5, 0.04, true);
+  return rect(0.05, 0.15, 0.9, 0.7, STONE, 0.05) + ellipse(0.5, 0.5, 0.32, 0.24, WATER) + circle(0.5, 0.5, 0.04, "var(--ink-faint)");
 }
 function stove(): string {
-  let s = rect(0.03, 0.03, 0.94, 0.94, 0.04);
+  let s = rect(0.03, 0.03, 0.94, 0.94, "var(--ink-faint)", 0.04);
   for (const cx of [0.28, 0.72]) {
     for (const cy of [0.3, 0.7]) {
-      s += circle(cx, cy, 0.13);
+      s += circle(cx, cy, 0.13, "var(--stone-dark)");
     }
   }
   return s;
 }
 function fridge(): string {
-  return rect(0.05, 0.03, 0.9, 0.94, 0.04) + line(0.05, 0.42, 0.95, 0.42) + line(0.85, 0.5, 0.85, 0.62);
+  return rect(0.05, 0.03, 0.9, 0.94, STONE, 0.04) + line(0.05, 0.42, 0.95, 0.42) + line(0.85, 0.5, 0.85, 0.62);
 }
 function diningTable(seats: number): string {
-  let s = ellipse(0.5, 0.5, 0.46, 0.44);
+  let s = ellipse(0.5, 0.5, 0.46, 0.44, WOOD);
   const perSide = Math.max(1, Math.round(seats / 2));
   for (let i = 0; i < perSide; i++) {
     const cx = (i + 1) / (perSide + 1);
-    s += rect(cx - 0.06, -0.12, 0.12, 0.12);
-    s += rect(cx - 0.06, 1.0, 0.12, 0.12);
+    s += rect(cx - 0.06, -0.12, 0.12, 0.12, FABRIC);
+    s += rect(cx - 0.06, 1.0, 0.12, 0.12, FABRIC);
   }
   return s;
 }
 function mandir(): string {
-  return `<path d="M 0.5 0.02 L 0.92 0.32 L 0.92 0.97 L 0.08 0.97 L 0.08 0.32 Z" ${FILL} ${S} />` + line(0.08, 0.32, 0.92, 0.32);
+  return `<path d="M 0.5 0.02 L 0.92 0.32 L 0.92 0.97 L 0.08 0.97 L 0.08 0.32 Z" fill="${WOOD}" ${S} />` + line(0.08, 0.32, 0.92, 0.32);
 }
 function bookshelfIcon(): string {
-  let s = rect(0.03, 0.03, 0.94, 0.94);
+  let s = rect(0.03, 0.03, 0.94, 0.94, WOOD);
   for (const x of [0.27, 0.5, 0.73]) s += line(x, 0.03, x, 0.97);
   return s;
 }
 function wc(): string {
-  return rect(0.2, 0.02, 0.6, 0.28, 0.04) + ellipse(0.5, 0.66, 0.34, 0.3);
+  return rect(0.2, 0.02, 0.6, 0.28, STONE, 0.04) + ellipse(0.5, 0.66, 0.34, 0.3, SURFACE);
 }
 function washBasin(): string {
-  return rect(0.05, 0.15, 0.9, 0.55, 0.06) + ellipse(0.5, 0.42, 0.3, 0.2);
+  return rect(0.05, 0.15, 0.9, 0.55, STONE, 0.06) + ellipse(0.5, 0.42, 0.3, 0.2, WATER);
 }
 function showerIcon(): string {
-  return rect(0.03, 0.03, 0.94, 0.94) + line(0.15, 0.15, 0.85, 0.85) + line(0.85, 0.15, 0.15, 0.85) + circle(0.5, 0.5, 0.08);
+  return rect(0.03, 0.03, 0.94, 0.94, WATER) + line(0.15, 0.15, 0.85, 0.85) + line(0.85, 0.15, 0.15, 0.85) + circle(0.5, 0.5, 0.08, SURFACE);
 }
 function washingMachine(): string {
-  return rect(0.05, 0.05, 0.9, 0.9, 0.06) + circle(0.5, 0.55, 0.28);
+  return rect(0.05, 0.05, 0.9, 0.9, STONE, 0.06) + circle(0.5, 0.55, 0.28, "var(--water)");
 }
 function planters(): string {
   let s = "";
@@ -129,18 +134,26 @@ function planters(): string {
     [0.75, 0.3],
     [0.5, 0.7],
   ]) {
-    s += circle(cx, cy, 0.18);
+    s += circle(cx, cy, 0.18, "var(--garden-canopy)");
   }
   return s;
 }
 function equipmentRack(): string {
-  let s = rect(0.03, 0.03, 0.94, 0.94);
+  let s = rect(0.03, 0.03, 0.94, 0.94, STONE);
   for (const x of [0.2, 0.4, 0.6, 0.8]) s += line(x, 0.03, x, 0.97);
   for (const y of [0.3, 0.6]) s += line(0.03, y, 0.97, y);
   return s;
 }
+function staircase(): string {
+  let s = rect(0.03, 0.03, 0.94, 0.94, "var(--stone-dark)");
+  for (let i = 1; i < 9; i++) {
+    s += line(0.03, i / 9, 0.97, i / 9);
+  }
+  s += `<path d="M 0.03 0.03 L 0.97 0.97" stroke="var(--ink-faint)" stroke-dasharray="0.04 0.04" vector-effect="non-scaling-stroke" />`;
+  return s;
+}
 function genericBox(): string {
-  return rect(0.06, 0.06, 0.88, 0.88, 0.04) + line(0.06, 0.06, 0.94, 0.94) + line(0.94, 0.06, 0.06, 0.94);
+  return rect(0.06, 0.06, 0.88, 0.88, SURFACE, 0.04) + line(0.06, 0.06, 0.94, 0.94) + line(0.94, 0.06, 0.06, 0.94);
 }
 
 const ICONS: Record<string, () => string> = {
@@ -170,6 +183,7 @@ const ICONS: Record<string, () => string> = {
   washing_machine: washingMachine,
   planters: planters,
   equipment_rack: equipmentRack,
+  staircase: staircase,
 };
 
 export function furnitureIconMarkup(type: string): string {

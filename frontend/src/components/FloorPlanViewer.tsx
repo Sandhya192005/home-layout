@@ -149,7 +149,7 @@ function buildFloorSvg(floor: FloorData, plotLength: number, plotWidth: number):
         svg += `<g transform="translate(${cx - size / 2} ${cy - size / 2}) scale(${size} ${size})" stroke-width="${unit * 0.06}">${markup}</g>`;
         idx++;
       };
-      for (let i = 0; i < p.capacity_cars; i++) placeIcon(carIconMarkup(), 0.08);
+      for (let i = 0; i < p.capacity_cars; i++) placeIcon(carIconMarkup(i + 1), 0.08);
       for (let i = 0; i < p.capacity_two_wheelers; i++) placeIcon(bikeIconMarkup(), 0.18);
     }
     svg += `<text x="${p.x + p.width / 2}" y="${p.y - unit * 0.6}" text-anchor="middle" class="room-dim" font-size="${unit * 1.4}">PARKING</text>`;
@@ -164,10 +164,13 @@ function buildFloorSvg(floor: FloorData, plotLength: number, plotWidth: number):
     const halo = `stroke="var(--room-${cat})" stroke-width="${labelSize * 0.5}" stroke-linejoin="round" paint-order="stroke"`;
     svg += `<g class="room-shape" data-room="${r.id}">`;
     svg += `<rect class="room-outline" data-room="${r.id}" x="${r.x}" y="${r.y}" width="${r.width}" height="${r.length}" fill="var(--room-${cat})" stroke-width="${unit * 0.12}" />`;
+    if (r.type === "staircase") {
+      svg += `<g transform="translate(${r.x} ${r.y}) scale(${r.width} ${r.length})" stroke-width="${unit * 0.04}">${furnitureIconMarkup("staircase")}</g>`;
+    }
     for (const it of r.furniture ?? []) {
       svg += `<g transform="translate(${it.x} ${it.y}) scale(${it.w} ${it.l})" stroke-width="${unit * 0.05}">${furnitureIconMarkup(it.type)}</g>`;
     }
-    svg += `<text x="${cx}" y="${cy - labelSize * 0.35}" text-anchor="middle" class="room-label" font-size="${labelSize}" ${halo}>${r.label}</text>`;
+    svg += `<text x="${cx}" y="${cy - labelSize * 0.35}" text-anchor="middle" class="room-label" font-size="${labelSize}" ${halo}>${r.label.toUpperCase()}</text>`;
     svg += `<text x="${cx}" y="${cy + dimSize * 1.15}" text-anchor="middle" class="room-dim" font-size="${dimSize}" ${halo}>(${fmt(r.width)}&#8242; &times; ${fmt(r.length)}&#8242;)</text>`;
     if (r.below_min_size) {
       svg += `<circle class="flag-dot" cx="${r.x + r.width - unit * 1.4}" cy="${r.y + unit * 1.4}" r="${unit * 0.7}" />`;
@@ -175,10 +178,13 @@ function buildFloorSvg(floor: FloorData, plotLength: number, plotWidth: number):
     svg += `</g>`;
   }
 
-  let walls = `<g stroke="var(--ink)" stroke-linecap="square">`;
+  let walls = `<g stroke-linecap="square">`;
   for (const w of floor.walls) {
-    const width = w.type === "exterior" ? unit * 0.45 : unit * 0.22;
-    walls += `<line x1="${w.x1}" y1="${w.y1}" x2="${w.x2}" y2="${w.y2}" stroke-width="${width}" />`;
+    const isExterior = w.type === "exterior";
+    const width = isExterior ? unit * 0.55 : unit * 0.26;
+    walls += `<line x1="${w.x1}" y1="${w.y1}" x2="${w.x2}" y2="${w.y2}" stroke="var(--wall)" stroke-width="${width}" />`;
+    // a thinner lighter stripe down the middle reads as a brick-course texture
+    walls += `<line x1="${w.x1}" y1="${w.y1}" x2="${w.x2}" y2="${w.y2}" stroke="var(--wall-light)" stroke-width="${width * 0.32}" />`;
   }
   walls += `</g>`;
   svg += walls;
@@ -319,6 +325,15 @@ export default function FloorPlanViewer({ plan }: { plan: PlanData }) {
 
       <div className="fpv-layout">
         <div className="drawing-panel card">
+          <div className="drawing-panel-head">
+            <span className="drawing-panel-title">{floor.label} Plan</span>
+            <span className="drawing-panel-plot">
+              Plot: {fmt0(plan.meta.plot_width)}&#8242; &times; {fmt0(plan.meta.plot_length)}&#8242;
+            </span>
+            <span className="drawing-panel-floor">
+              {plan.meta.facing.charAt(0).toUpperCase() + plan.meta.facing.slice(1)} facing
+            </span>
+          </div>
           <div
             className="drawing-svg-wrap"
             onMouseMove={handleMouseMove}
@@ -349,6 +364,7 @@ export default function FloorPlanViewer({ plan }: { plan: PlanData }) {
             )}
           </div>
           <div className="legend">
+            <span className="legend-title">Key:</span>
             {(["social", "sleep", "wet", "other"] as const).map((c) => (
               <div key={c} className="legend-item">
                 <span className="legend-swatch" style={{ background: `var(--room-${c})` }} />
@@ -365,13 +381,15 @@ export default function FloorPlanViewer({ plan }: { plan: PlanData }) {
             </div>
             <div className="legend-item">
               <svg className="legend-line" viewBox="0 0 24 10">
-                <line x1="1" y1="5" x2="23" y2="5" stroke="var(--ink)" strokeWidth="3.5" />
+                <line x1="1" y1="5" x2="23" y2="5" stroke="var(--wall)" strokeWidth="5" />
+                <line x1="1" y1="5" x2="23" y2="5" stroke="var(--wall-light)" strokeWidth="1.6" />
               </svg>
-              Exterior wall
+              Exterior wall (brick)
             </div>
             <div className="legend-item">
               <svg className="legend-line" viewBox="0 0 24 10">
-                <line x1="1" y1="5" x2="23" y2="5" stroke="var(--ink)" strokeWidth="1.5" />
+                <line x1="1" y1="5" x2="23" y2="5" stroke="var(--wall)" strokeWidth="2.5" />
+                <line x1="1" y1="5" x2="23" y2="5" stroke="var(--wall-light)" strokeWidth="0.8" />
               </svg>
               Interior wall
             </div>

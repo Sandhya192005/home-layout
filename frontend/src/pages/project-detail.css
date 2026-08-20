@@ -17,11 +17,11 @@
 
 .pd-layout {
   display: grid;
-  grid-template-columns: minmax(300px, 380px) 1fr;
+  grid-template-columns: minmax(280px, 340px) 1fr;
   gap: 1.5rem;
   align-items: start;
 }
-@media (max-width: 1000px) {
+@media (max-width: 1100px) {
   .pd-layout {
     grid-template-columns: 1fr;
   }

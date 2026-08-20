@@ -28,23 +28,55 @@
 
 .fpv-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.9fr) minmax(280px, 1fr);
+  grid-template-columns: minmax(0, 2.3fr) minmax(300px, 1fr);
   gap: 1.5rem;
   align-items: start;
 }
-@media (max-width: 880px) {
+@media (max-width: 1000px) {
   .fpv-layout {
     grid-template-columns: 1fr;
   }
 }
 
 .drawing-panel {
-  padding: 0.75rem;
+  padding: 1rem;
+}
+
+.drawing-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0 0.35rem 0.7rem;
+  margin-bottom: 0.6rem;
+  border-bottom: 1px solid var(--surface-line);
+}
+.drawing-panel-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.15rem;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+.drawing-panel-plot {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+.drawing-panel-floor {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
 }
 
 .drawing-svg-wrap {
   width: 100%;
-  aspect-ratio: 4 / 3.1;
+  aspect-ratio: 4 / 3.4;
+  max-height: 78vh;
   position: relative;
 }
 
@@ -59,6 +91,16 @@
 }
 .drawing-svg-wrap .room-shape:hover .room-outline {
   filter: brightness(0.94);
+}
+.drawing-svg-wrap .room-label {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  fill: var(--ink);
+}
+.drawing-svg-wrap .room-dim {
+  font-family: var(--font-mono);
+  fill: var(--ink-soft);
 }
 
 .fpv-tooltip {
@@ -83,12 +125,23 @@
 .legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.9rem;
-  margin-top: 0.7rem;
-  padding-top: 0.6rem;
-  border-top: 1px solid var(--surface-line);
+  align-items: center;
+  gap: 0.9rem 1.4rem;
+  margin-top: 0.8rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--surface-line);
+  border-radius: 3px;
+  background: var(--paper);
   font-size: 0.72rem;
   color: var(--ink-soft);
+}
+.legend-title {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
 }
 .legend-item {
   display: flex;

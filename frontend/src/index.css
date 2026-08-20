@@ -17,10 +17,22 @@
   --room-wet: #dce1e8;
   --room-other: #eae5da;
   --garden: #e3ead8;
-  --garden-canopy: #a9c19a;
+  --garden-canopy: #8fb37a;
+  --garden-canopy-dark: #6f9a5c;
+  --garden-canopy-light: #aecb96;
   --surface: #fffdf8;
   --surface-line: #e8e1cf;
   --shadow: rgba(35, 35, 31, 0.08);
+
+  --wall: #8a5a34;
+  --wall-light: #c99f6e;
+  --wood: #b98850;
+  --wood-dark: #8a5f34;
+  --fabric: #e6d3b3;
+  --fabric-dark: #d9bd8e;
+  --stone: #dfdcd2;
+  --stone-dark: #b9b3a3;
+  --water: #bcd4de;
 
   --font-display: "Big Shoulders Display", sans-serif;
   --font-body: "IBM Plex Sans", system-ui, sans-serif;
@@ -71,7 +83,7 @@ button {
 }
 
 .container {
-  max-width: 1200px;
+  max-width: 1560px;
   margin: 0 auto;
   padding: 0 1.5rem;
 }
