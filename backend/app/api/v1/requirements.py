@@ -9,7 +9,6 @@ from app.crud import requirement as requirement_crud
 from app.models.user import User
 from app.schemas.floorplan import FloorPlanGenerateResponse, FloorPlanRead
 from app.schemas.requirement import RequirementCreate, RequirementRead
-from app.services.ai_suggestions import build_suggestions
 from app.services.floorplan_generator import generate_floor_plan
 from app.services.validation import validate_requirement
 
@@ -75,8 +74,5 @@ def generate_plan_for_requirement(
     floor_plan = floorplan_crud.create_floor_plan(
         db, project_id, requirement_id, plan_data, total_built_up_area, cost["recommended_cost"], current_user.id
     )
-
-    suggestions = build_suggestions(req_in, warnings, plan_data, total_built_up_area)
-    floorplan_crud.create_ai_suggestion(db, project_id, requirement_id, suggestions, current_user.id)
 
     return FloorPlanGenerateResponse(floor_plan=FloorPlanRead.model_validate(floor_plan), warnings=warnings)

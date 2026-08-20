@@ -82,14 +82,10 @@ print("floor_plan id:", gen["floor_plan"]["id"], "version:", gen["floor_plan"]["
       "area:", gen["floor_plan"]["total_built_up_area"], "cost:", gen["floor_plan"]["estimated_cost"])
 assert len(gen["floor_plan"]["plan_data"]["floors"]) == 2
 
-# 5. Fetch latest floor plan + suggestions
+# 5. Fetch latest floor plan
 r = client.get(f"/api/v1/projects/{project['id']}/floorplans/latest", headers=headers)
 assert r.status_code == 200, r.text
 print("latest floorplan fetch OK")
-
-r = client.get(f"/api/v1/projects/{project['id']}/suggestions/latest", headers=headers)
-assert r.status_code == 200, r.text
-print("suggestions OK:", len(r.json()["suggestions"]), "suggestions")
 
 # 6. Regenerate with changed requirement -> should get a NEW version and different plan
 req_payload2 = dict(req_payload)

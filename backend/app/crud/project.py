@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.models.floorplan import AISuggestion, FloorPlan
+from app.models.floorplan import FloorPlan
 from app.models.project import Project
 from app.models.requirement import Requirement
 from app.schemas.project import ProjectCreate, ProjectUpdate
@@ -47,8 +47,8 @@ def update_project(db: Session, project: Project, project_in: ProjectUpdate, act
 
 def delete_project(db: Session, project: Project, actor_id: int) -> None:
     """Soft delete: flag the project and cascade the same flag onto its
-    requirements/floor plans/AI suggestions, since a soft delete doesn't get
-    the database's ON DELETE CASCADE for free the way a real delete did."""
+    requirements/floor plans, since a soft delete doesn't get the database's
+    ON DELETE CASCADE for free the way a real delete did."""
     now = datetime.now(timezone.utc)
     project.deleted_at = now
     project.deleted_by = actor_id
@@ -58,9 +58,6 @@ def delete_project(db: Session, project: Project, actor_id: int) -> None:
         {"deleted_at": now, "deleted_by": actor_id, "is_active": False}, synchronize_session=False
     )
     db.query(FloorPlan).filter(FloorPlan.project_id == project.id, FloorPlan.deleted_at.is_(None)).update(
-        {"deleted_at": now, "deleted_by": actor_id, "is_active": False}, synchronize_session=False
-    )
-    db.query(AISuggestion).filter(AISuggestion.project_id == project.id, AISuggestion.deleted_at.is_(None)).update(
         {"deleted_at": now, "deleted_by": actor_id, "is_active": False}, synchronize_session=False
     )
     db.commit()

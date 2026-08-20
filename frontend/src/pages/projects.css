@@ -1,0 +1,57 @@
+.projects-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.projects-header h1 {
+  font-size: 1.8rem;
+}
+
+.new-project-form {
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.project-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.project-item {
+  padding: 0;
+}
+
+.project-item-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  text-decoration: none;
+  color: inherit;
+}
+
+.project-item-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--ink);
+}
+
+.status-chip {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.55rem;
+  border-radius: 2px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  white-space: nowrap;
+}

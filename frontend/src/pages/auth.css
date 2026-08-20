@@ -1,0 +1,18 @@
+.auth-page {
+  display: flex;
+  justify-content: center;
+  padding-top: 3rem;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 380px;
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.auth-card h1 {
+  font-size: 1.6rem;
+}

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.models.floorplan import AISuggestion, FloorPlan
+from app.models.floorplan import FloorPlan
 
 
 def get_next_version(db: Session, project_id: int) -> int:
@@ -71,28 +71,3 @@ def delete_floor_plan(db: Session, floor_plan: FloorPlan, actor_id: int) -> None
     floor_plan.deleted_by = actor_id
     floor_plan.is_active = False
     db.commit()
-
-
-def create_ai_suggestion(
-    db: Session, project_id: int, requirement_id: int, suggestions: list[dict], actor_id: int
-) -> AISuggestion:
-    suggestion = AISuggestion(
-        project_id=project_id,
-        requirement_id=requirement_id,
-        suggestions=suggestions,
-        created_by=actor_id,
-        updated_by=actor_id,
-    )
-    db.add(suggestion)
-    db.commit()
-    db.refresh(suggestion)
-    return suggestion
-
-
-def get_latest_suggestion(db: Session, project_id: int) -> AISuggestion | None:
-    return (
-        db.query(AISuggestion)
-        .filter(AISuggestion.project_id == project_id, AISuggestion.deleted_at.is_(None))
-        .order_by(AISuggestion.created_at.desc())
-        .first()
-    )

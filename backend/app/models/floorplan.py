@@ -21,13 +21,3 @@ class FloorPlan(Base, AuditMixin):
 
     project: Mapped["Project"] = relationship(back_populates="floor_plans")
     requirement: Mapped["Requirement"] = relationship(back_populates="floor_plans")
-
-
-class AISuggestion(Base, AuditMixin):
-    __tablename__ = "ai_suggestions"
-
-    id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
-    requirement_id: Mapped[int] = mapped_column(ForeignKey("requirements.id", ondelete="CASCADE"), index=True)
-
-    suggestions: Mapped[list] = mapped_column(JSON, nullable=False)
