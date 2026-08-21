@@ -27,6 +27,7 @@ class RequirementBase(BaseModel):
     two_wheelers: int = Field(default=1, ge=0, le=10)
 
     floors: int = Field(default=1, ge=1, le=5)
+    floor_type: Literal["duplex", "independent"] = "duplex"
     budget: float = Field(default=0, ge=0)
 
     vastu_compliant: bool = False

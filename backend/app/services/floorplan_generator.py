@@ -129,7 +129,88 @@ def _make_room(room_type: str, floor_index: int, seq: int, label_suffix: str = "
     )
 
 
+def _split_evenly(total: int, n: int) -> list[int]:
+    """Divide `total` into `n` buckets as evenly as possible, remainder to the front."""
+    base, rem = divmod(total, n)
+    return [base + (1 if i < rem else 0) for i in range(n)]
+
+
+def is_independent_floors(req: RequirementCreate) -> bool:
+    return req.floors > 1 and req.floor_type == "independent"
+
+
 def build_room_program(req: RequirementCreate) -> list[RoomInstance]:
+    if is_independent_floors(req):
+        return _build_independent_room_program(req)
+    return _build_duplex_room_program(req)
+
+
+def _build_independent_room_program(req: RequirementCreate) -> list[RoomInstance]:
+    """Each floor is a fully self-contained house (own kitchen, living/dining,
+    bedrooms, bathrooms) reached off a shared internal staircase -- unlike the
+    duplex program below, which spreads ONE household's rooms across floors."""
+    rooms: list[RoomInstance] = []
+    seq = 0
+    floors = req.floors
+
+    def nxt() -> int:
+        nonlocal seq
+        seq += 1
+        return seq
+
+    bedrooms_per_floor = _split_evenly(req.bedrooms, floors)
+    bathrooms_per_floor = _split_evenly(req.bathrooms, floors)
+    balconies_per_floor = _split_evenly(req.balconies, floors)
+    additional_per_floor: list[list[str]] = [[] for _ in range(floors)]
+    for i, extra in enumerate(req.additional_rooms):
+        additional_per_floor[i % floors].append(extra)
+
+    for floor_idx in range(floors):
+        # Only the ground floor touches grade, so only it can have an outdoor
+        # veranda porch; a foyer (indoor entrance hall) is fair game on every
+        # floor since each is its own unit off the shared staircase landing.
+        if floor_idx == 0 and req.has_veranda:
+            veranda = _make_room("veranda", floor_idx, nxt())
+            veranda.zones = FRONT_ZONES_BY_FACING[req.facing]
+            rooms.append(veranda)
+        if req.has_foyer:
+            foyer = _make_room("foyer", floor_idx, nxt())
+            foyer.zones = FRONT_ZONES_BY_FACING[req.facing]
+            rooms.append(foyer)
+
+        if req.has_living_room:
+            rooms.append(_make_room("living_room", floor_idx, nxt()))
+        if req.has_dining_room:
+            rooms.append(_make_room("dining_room", floor_idx, nxt()))
+        rooms.append(_make_room("kitchen", floor_idx, nxt()))
+        if req.has_utility_room:
+            rooms.append(_make_room("utility", floor_idx, nxt()))
+        if req.has_pooja_room:
+            rooms.append(_make_room("pooja_room", floor_idx, nxt()))
+        if req.has_study_room:
+            rooms.append(_make_room("study_room", floor_idx, nxt()))
+
+        floor_bedrooms = max(bedrooms_per_floor[floor_idx], 1)
+        bedroom_types = ["master_bedroom"] + ["bedroom"] * max(floor_bedrooms - 1, 0)
+        for btype in bedroom_types:
+            rooms.append(_make_room(btype, floor_idx, nxt()))
+
+        floor_bathrooms = max(bathrooms_per_floor[floor_idx], 1)
+        for i in range(floor_bathrooms):
+            bath_type = "accessible_bathroom" if (req.wheelchair_accessible and floor_idx == 0 and i == 0) else "bathroom"
+            rooms.append(_make_room(bath_type, floor_idx, nxt()))
+
+        for extra in additional_per_floor[floor_idx]:
+            rooms.append(_make_room(extra, floor_idx, nxt()))
+        for _ in range(balconies_per_floor[floor_idx]):
+            rooms.append(_make_room("balcony", floor_idx, nxt()))
+
+        rooms.append(_make_room("staircase", floor_idx, nxt()))
+
+    return rooms
+
+
+def _build_duplex_room_program(req: RequirementCreate) -> list[RoomInstance]:
     rooms: list[RoomInstance] = []
     seq = 0
     floors = req.floors
@@ -422,9 +503,18 @@ def layout_floor(rooms: list[RoomInstance], buildable: dict, vastu: bool) -> Non
 # Parking
 # ---------------------------------------------------------------------------
 
-def compute_parking(base_rect: dict, facing: str, front_sb: float, cars: int, two_wheelers: int):
+def compute_parking(
+    base_rect: dict, facing: str, front_sb: float, cars: int, two_wheelers: int, full_rect: dict | None = None
+):
+    """`base_rect` is the room-layout area (already excludes any staircase
+    strip); `full_rect` is the true exterior building footprint (includes it).
+    The parking depth carve recedes the whole front facade equally, so it's
+    applied to both -- `full_outline` is what exterior walls should be drawn
+    from, so the staircase ends up enclosed inside the house rather than
+    appearing as a detached block outside the ground-floor walls."""
+    full_rect = full_rect if full_rect is not None else base_rect
     if cars <= 0 and two_wheelers <= 0:
-        return None, base_rect, base_rect
+        return None, base_rect, base_rect, full_rect
 
     lateral_axis = "w" if facing in ("north", "south") else "l"
     depth_needed = CAR_PARKING_SIZE["l"] if cars > 0 else TWO_WHEELER_PARKING_SIZE["l"]
@@ -437,6 +527,7 @@ def compute_parking(base_rect: dict, facing: str, front_sb: float, cars: int, tw
     front_edge = _front_edge(facing)
     outline = geo.shrink_edge(base_rect, front_edge, extra_depth)
     room_rect = outline
+    full_outline = geo.shrink_edge(full_rect, front_edge, extra_depth)
 
     # Parking rect sits in the reclaimed strip nearest the West/North corner of the front edge.
     if facing == "north":
@@ -452,7 +543,7 @@ def compute_parking(base_rect: dict, facing: str, front_sb: float, cars: int, tw
 
     parking["capacity_cars"] = cars
     parking["capacity_two_wheelers"] = two_wheelers
-    return parking, outline, room_rect
+    return parking, outline, room_rect, full_outline
 
 
 # ---------------------------------------------------------------------------
@@ -678,14 +769,18 @@ def generate_floor_plan(req: RequirementCreate) -> dict:
         veranda_room = next((r for r in rooms if r.floor_index == floor_idx and r.room_type == "veranda"), None)
 
         if floor_idx == 0:
-            parking, outline, room_area_rect = compute_parking(
-                rooms_base_rect, req.facing, front_sb, req.cars, req.two_wheelers
+            parking, outline, room_area_rect, full_outline = compute_parking(
+                rooms_base_rect, req.facing, front_sb, req.cars, req.two_wheelers, full_rect=base_rect
             )
         else:
-            parking, outline, room_area_rect = None, rooms_base_rect, rooms_base_rect
+            parking, outline, room_area_rect, full_outline = None, rooms_base_rect, rooms_base_rect, base_rect
 
         if stair_room is not None and stair_strip is not None:
-            stair_room.rect = dict(stair_strip)
+            # `stair_strip` is cut once from the unrecessed base_rect so it
+            # stacks at an identical x/y position on every floor; on the
+            # ground floor, trim it to the parking-receded footprint so it
+            # stays fully inside that floor's exterior walls too.
+            stair_room.rect = geo.rect_intersect(stair_strip, full_outline) if floor_idx == 0 else dict(stair_strip)
             stair_room.zone = "SW" if stair_side == "west" else "SE"
 
         # A veranda is a covered porch in front of the door, not just another
@@ -707,7 +802,10 @@ def generate_floor_plan(req: RequirementCreate) -> dict:
             + ([stair_room] if stair_room and stair_room.rect else [])
             + ([veranda_room] if veranda_room and veranda_room.rect else [])
         )
-        floor_outline = outline if floor_idx == 0 else base_rect
+        # The exterior wall envelope is always the true building footprint
+        # (including the staircase strip), so the staircase reads as part of
+        # the house's interior on every floor instead of a detached side block.
+        floor_outline = full_outline
 
         room_dicts = []
         for room in all_placed:
@@ -729,7 +827,11 @@ def generate_floor_plan(req: RequirementCreate) -> dict:
 
         windows = _build_windows(all_placed, floor_outline)
         entrance_id = None
-        if floor_idx == 0:
+        # Duplex: only the ground floor gets a "front door" -- upper floors
+        # are the same household, reached via the internal staircase.
+        # Independent floors: every floor is its own unit off the shared
+        # staircase landing, so every floor gets its own front door.
+        if floor_idx == 0 or is_independent_floors(req):
             # if both a veranda and a foyer are present, the main door sits on
             # the veranda -- it's the outermost, street-facing room
             entrance_candidates = (

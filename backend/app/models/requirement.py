@@ -37,6 +37,7 @@ class Requirement(Base, AuditMixin):
 
     # Structure
     floors: Mapped[int] = mapped_column(Integer, default=1)
+    floor_type: Mapped[str] = mapped_column(String(20), default="duplex")  # duplex | independent
     budget: Mapped[float] = mapped_column(Float, default=0)  # in currency units (e.g. INR)
 
     # Preferences

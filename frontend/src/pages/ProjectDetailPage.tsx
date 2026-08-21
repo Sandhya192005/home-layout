@@ -24,6 +24,7 @@ const DEFAULT_REQUIREMENT: RequirementInput = {
   cars: 1,
   two_wheelers: 1,
   floors: 1,
+  floor_type: "duplex",
   budget: 3500000,
   vastu_compliant: false,
   wheelchair_accessible: false,
@@ -201,6 +202,19 @@ export default function ProjectDetailPage() {
                 onChange={(e) => update("floors", Number(e.target.value))}
               />
             </div>
+            {form.floors > 1 && (
+              <div className="field">
+                <label htmlFor="floor_type">Multi-floor style</label>
+                <select
+                  id="floor_type"
+                  value={form.floor_type}
+                  onChange={(e) => update("floor_type", e.target.value as RequirementInput["floor_type"])}
+                >
+                  <option value="duplex">Duplex (single house, internal staircase)</option>
+                  <option value="independent">Independent floors (separate house per floor)</option>
+                </select>
+              </div>
+            )}
           </div>
 
           <div className="checkbox-grid">

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { FloorData, PlanData, RoomData } from "../api/types";
 import { furnitureIconMarkup } from "./furnitureIcons";
 import { bikeIconMarkup, carIconMarkup, shrubIconMarkup, treeIconMarkup } from "./siteIcons";
@@ -326,10 +326,16 @@ function buildFloorSvg(floor: FloorData, plotLength: number, plotWidth: number):
   return { svg, viewBox: `${vbX} ${vbY} ${vbW} ${vbH}` };
 }
 
+function sanitizeFileName(label: string): string {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "floor-plan";
+}
+
 export default function FloorPlanViewer({ plan }: { plan: PlanData }) {
   const [activeFloorIdx, setActiveFloorIdx] = useState(0);
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; room: RoomData } | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const svgRef = useRef<SVGSVGElement>(null);
 
   const floor = plan.floors[activeFloorIdx];
   const { svg, viewBox } = useMemo(
@@ -362,6 +368,67 @@ export default function FloorPlanViewer({ plan }: { plan: PlanData }) {
     setActiveRoomId((prev) => (prev === roomId ? null : roomId));
   }
 
+  function handleDownload() {
+    const svgEl = svgRef.current;
+    if (!svgEl || downloading) return;
+    setDownloading(true);
+
+    const clone = svgEl.cloneNode(true) as SVGSVGElement;
+    clone.removeAttribute("class");
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+
+    // The markup fills/strokes reference the page's CSS custom properties
+    // (var(--room-social) etc.) -- once serialized and rendered as a
+    // standalone image those variables have no :root to resolve against, so
+    // inline their current computed values as an embedded stylesheet first.
+    const varNames = Array.from(new Set(Array.from(clone.outerHTML.matchAll(/var\((--[a-z0-9-]+)\)/gi)).map((m) => m[1])));
+    const rootStyles = getComputedStyle(document.documentElement);
+    const varDecls = varNames.map((name) => `${name}: ${rootStyles.getPropertyValue(name).trim()};`).join(" ");
+    const styleEl = document.createElementNS("http://www.w3.org/2000/svg", "style");
+    styleEl.textContent = `:root { ${varDecls} }`;
+    clone.insertBefore(styleEl, clone.firstChild);
+
+    const vb = clone.viewBox.baseVal;
+    const targetWidth = 2200;
+    const targetHeight = Math.round((vb.height / vb.width) * targetWidth);
+    clone.setAttribute("width", String(targetWidth));
+    clone.setAttribute("height", String(targetHeight));
+
+    const svgString = new XMLSerializer().serializeToString(clone);
+    const svgUrl = URL.createObjectURL(new Blob([svgString], { type: "image/svg+xml;charset=utf-8" }));
+
+    const cleanup = () => {
+      URL.revokeObjectURL(svgUrl);
+      setDownloading(false);
+    };
+
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        cleanup();
+        return;
+      }
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, targetWidth, targetHeight);
+      ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+      canvas.toBlob((blob) => {
+        cleanup();
+        if (!blob) return;
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `${sanitizeFileName(floor.label)}-floor-plan.png`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+      }, "image/png");
+    };
+    img.onerror = cleanup;
+    img.src = svgUrl;
+  }
+
   return (
     <div className="floor-plan-viewer">
       {plan.floors.length > 1 && (
@@ -386,12 +453,17 @@ export default function FloorPlanViewer({ plan }: { plan: PlanData }) {
         <div className="drawing-panel card">
           <div className="drawing-panel-head">
             <span className="drawing-panel-title">{floor.label} Plan</span>
-            <span className="drawing-panel-plot">
-              Plot: {fmt0(plan.meta.plot_width)}&#8242; &times; {fmt0(plan.meta.plot_length)}&#8242;
-            </span>
-            <span className="drawing-panel-floor">
-              {plan.meta.facing.charAt(0).toUpperCase() + plan.meta.facing.slice(1)} facing
-            </span>
+            <div className="drawing-panel-meta">
+              <span className="drawing-panel-plot">
+                Plot: {fmt0(plan.meta.plot_width)}&#8242; &times; {fmt0(plan.meta.plot_length)}&#8242;
+              </span>
+              <span className="drawing-panel-floor">
+                {plan.meta.facing.charAt(0).toUpperCase() + plan.meta.facing.slice(1)} facing
+              </span>
+              <button type="button" className="btn btn-secondary drawing-panel-download" onClick={handleDownload} disabled={downloading}>
+                {downloading ? "Preparing…" : "Download PNG"}
+              </button>
+            </div>
           </div>
           <div
             className="drawing-svg-wrap"
@@ -400,6 +472,7 @@ export default function FloorPlanViewer({ plan }: { plan: PlanData }) {
             onClick={handleClick}
           >
             <svg
+              ref={svgRef}
               viewBox={viewBox}
               className={activeRoomId ? `has-active` : ""}
               dangerouslySetInnerHTML={{ __html: svg }}

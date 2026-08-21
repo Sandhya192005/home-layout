@@ -162,6 +162,13 @@ def on_boundary(rect: dict, outline: dict) -> list[str]:
     return sides
 
 
+def rect_intersect(a: dict, b: dict) -> dict:
+    """Overlapping region of two rects (assumes they do overlap)."""
+    x0, y0 = max(a["x"], b["x"]), max(a["y"], b["y"])
+    x1, y1 = min(rect_x2(a), rect_x2(b)), min(rect_y2(a), rect_y2(b))
+    return {"x": x0, "y": y0, "w": max(x1 - x0, 0.0), "l": max(y1 - y0, 0.0)}
+
+
 def rects_overlap(a: dict, b: dict) -> bool:
     """True if rects `a` and `b` overlap by more than a sliver (touching edges don't count)."""
     return (

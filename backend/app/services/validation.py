@@ -38,7 +38,7 @@ def _ground_floor_layout_rect(req: RequirementCreate) -> dict:
         rooms_base_rect = base_rect
 
     front_sb = _setback(req.plot_length if req.facing in ("north", "south") else req.plot_width, "front")
-    _, _, layout_rect = fpg.compute_parking(rooms_base_rect, req.facing, front_sb, req.cars, req.two_wheelers)
+    _, _, layout_rect, _ = fpg.compute_parking(rooms_base_rect, req.facing, front_sb, req.cars, req.two_wheelers)
 
     if req.has_veranda:
         _, layout_rect = geo.split_strip(layout_rect, fpg._front_edge(req.facing), fpg.VERANDA_DEPTH)
@@ -72,31 +72,43 @@ def estimate_minimum_plot_area(req: RequirementCreate) -> float:
 
 
 def _room_program(req: RequirementCreate) -> dict[str, int]:
+    """Rough room counts used only to sanity-check the plot's total area.
+    In "independent" multi-floor mode each floor is its own self-contained
+    house (own kitchen, living/dining, at least one bedroom+bathroom), so the
+    shared-room counts get multiplied per floor instead of appearing once."""
+    from app.services.floorplan_generator import is_independent_floors
+
     counts: dict[str, int] = {}
-    counts["master_bedroom"] = 1
-    if req.bedrooms > 1:
-        counts["bedroom"] = req.bedrooms - 1
-    counts["bathroom"] = req.bathrooms
+    independent = is_independent_floors(req)
+    per_floor = req.floors if independent else 1
+
+    counts["master_bedroom"] = per_floor if independent else 1
+    remaining_bedrooms = max(req.bedrooms - counts["master_bedroom"], 0)
+    if remaining_bedrooms > 0:
+        counts["bedroom"] = remaining_bedrooms
+
+    counts["bathroom"] = max(req.bathrooms, per_floor) if independent else req.bathrooms
     if req.wheelchair_accessible and counts["bathroom"] > 0:
         counts["bathroom"] -= 1
         counts["accessible_bathroom"] = 1
-    counts["kitchen"] = 1
+
+    counts["kitchen"] = per_floor
     if req.has_living_room:
-        counts["living_room"] = 1
+        counts["living_room"] = per_floor
     if req.has_dining_room:
-        counts["dining_room"] = 1
+        counts["dining_room"] = per_floor
     if req.has_pooja_room:
-        counts["pooja_room"] = 1
+        counts["pooja_room"] = per_floor
     if req.has_study_room:
-        counts["study_room"] = 1
+        counts["study_room"] = per_floor
     if req.has_utility_room:
-        counts["utility"] = 1
+        counts["utility"] = per_floor
     if req.balconies:
         counts["balcony"] = req.balconies
     for extra in req.additional_rooms:
         counts[extra] = counts.get(extra, 0) + 1
     if req.floors > 1:
-        counts["staircase"] = 1
+        counts["staircase"] = per_floor if independent else 1
     return counts
 
 

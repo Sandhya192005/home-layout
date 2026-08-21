@@ -25,6 +25,7 @@ export interface Project extends AuditFields {
 }
 
 export type Facing = "north" | "south" | "east" | "west";
+export type FloorType = "duplex" | "independent";
 
 export const ADDITIONAL_ROOM_TYPES = [
   "home_office",
@@ -54,6 +55,7 @@ export interface RequirementInput {
   cars: number;
   two_wheelers: number;
   floors: number;
+  floor_type: FloorType;
   budget: number;
   vastu_compliant: boolean;
   wheelchair_accessible: boolean;
