@@ -184,6 +184,7 @@ SETBACK_RULES = {
 }
 
 MAX_GROUND_COVERAGE = 0.70  # max fraction of plot area the ground floor footprint may occupy
+MAX_FAR = 2.0  # typical residential floor-area-ratio (total built-up area / plot area) municipal limit
 
 # Construction cost per sqft by quality tier (illustrative, INR)
 COST_TIERS = {
@@ -191,4 +192,30 @@ COST_TIERS = {
     "standard": 1900,
     "premium": 2500,
     "luxury": 3500,
+}
+
+# Rule-of-thumb material quantities per sqft of built-up area (illustrative,
+# widely-cited Indian residential RCC-frame construction ratios) -- for a
+# rough bill-of-quantities estimate, not a substitute for a structural BOQ.
+BOQ_RATES_PER_SQFT = {
+    "cement_bags": 0.40,
+    "steel_kg": 4.0,
+    "bricks": 8.0,
+    "sand_cft": 1.5,
+    "aggregate_cft": 1.2,
+    "paint_liters": 0.10,
+}
+
+# Rough construction timeline (weeks) -- fixed setup overhead plus a rate per
+# 1000 sqft of built-up area, applied per phase.
+CONSTRUCTION_TIMELINE_FIXED_WEEKS = {
+    "foundation": 3,
+    "electrical_plumbing_rough_in": 2,
+    "finishing": 3,
+}
+CONSTRUCTION_TIMELINE_WEEKS_PER_1000_SQFT = {
+    "foundation": 1.5,
+    "structure_and_brickwork": 5.0,
+    "electrical_plumbing_rough_in": 1.5,
+    "finishing": 4.0,
 }

@@ -6,6 +6,7 @@ import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import ProjectsPage from "./pages/ProjectsPage";
 import ProjectDetailPage from "./pages/ProjectDetailPage";
+import SharedFloorPlanPage from "./pages/SharedFloorPlanPage";
 
 export default function App() {
   return (
@@ -15,6 +16,7 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
           <Route element={<Layout />}>
+            <Route path="/share/:token" element={<SharedFloorPlanPage />} />
             <Route
               path="/projects"
               element={

@@ -1,7 +1,10 @@
 import type {
   FloorPlan,
   FloorPlanGenerateResponse,
+  FloorPlanShare,
+  FurnitureLayoutUpdateInput,
   Project,
+  PublicFloorPlan,
   Requirement,
   RequirementInput,
   User,
@@ -136,4 +139,18 @@ export const api = {
     }),
   deleteFloorPlan: (projectId: number, floorPlanId: number) =>
     request<void>(`/projects/${projectId}/floorplans/${floorPlanId}`, { method: "DELETE" }),
+
+  // --- shareable links ---
+  getShare: (projectId: number, floorPlanId: number) =>
+    request<FloorPlanShare | null>(`/projects/${projectId}/floorplans/${floorPlanId}/share`),
+  createShare: (projectId: number, floorPlanId: number) =>
+    request<FloorPlanShare>(`/projects/${projectId}/floorplans/${floorPlanId}/share`, { method: "POST" }),
+  revokeShare: (projectId: number, floorPlanId: number) =>
+    request<void>(`/projects/${projectId}/floorplans/${floorPlanId}/share`, { method: "DELETE" }),
+  getPublicFloorPlan: (token: string) =>
+    request<PublicFloorPlan>(`/public/floorplans/${token}`, { auth: false }),
+
+  // --- furniture editor ---
+  updateFurniture: (projectId: number, floorPlanId: number, input: FurnitureLayoutUpdateInput) =>
+    request<FloorPlan>(`/projects/${projectId}/floorplans/${floorPlanId}/furniture`, { method: "PUT", body: input }),
 };

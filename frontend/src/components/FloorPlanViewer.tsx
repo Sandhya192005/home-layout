@@ -1,8 +1,58 @@
-import { useMemo, useRef, useState } from "react";
-import type { FloorData, PlanData, RoomData } from "../api/types";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api, ApiError } from "../api/client";
+import type { CompoundWallStyle, FloorData, FurnitureItem, GateStyle, PlanData, RoomData } from "../api/types";
 import { furnitureIconMarkup } from "./furnitureIcons";
 import { bikeIconMarkup, carIconMarkup, shrubIconMarkup, treeIconMarkup } from "./siteIcons";
 import "./floor-plan-viewer.css";
+
+const FURNITURE_CATALOG: { type: string; label: string; w: number; l: number }[] = [
+  { type: "sofa_set", label: "Sofa", w: 6, l: 2.5 },
+  { type: "center_table", label: "Center table", w: 3, l: 1.5 },
+  { type: "tv_unit", label: "TV unit", w: 4, l: 1.2 },
+  { type: "dining_table_6", label: "Dining table (6)", w: 5, l: 5 },
+  { type: "bed_king", label: "Bed (king)", w: 6.5, l: 6.5 },
+  { type: "bed_queen", label: "Bed (queen)", w: 5, l: 6.5 },
+  { type: "bed_single", label: "Bed (single)", w: 3.5, l: 6.5 },
+  { type: "wardrobe", label: "Wardrobe", w: 4, l: 2 },
+  { type: "dresser", label: "Dresser", w: 3, l: 1.5 },
+  { type: "study_table", label: "Study table", w: 3.5, l: 2 },
+  { type: "chair", label: "Chair", w: 1.5, l: 1.5 },
+  { type: "bookshelf", label: "Bookshelf", w: 3, l: 1 },
+  { type: "l_shape_counter", label: "Kitchen counter", w: 6, l: 2 },
+  { type: "sink", label: "Sink", w: 2, l: 1.8 },
+  { type: "stove", label: "Stove", w: 2.5, l: 2 },
+  { type: "refrigerator", label: "Refrigerator", w: 2.5, l: 2.5 },
+  { type: "washing_machine", label: "Washing machine", w: 2, l: 2 },
+  { type: "mandir_unit", label: "Mandir unit", w: 2.5, l: 1.5 },
+  { type: "wc", label: "WC", w: 2, l: 2.5 },
+  { type: "wash_basin", label: "Wash basin", w: 2, l: 1.5 },
+  { type: "shower", label: "Shower", w: 3, l: 3 },
+  { type: "planters", label: "Planters", w: 2, l: 2 },
+];
+
+function furnitureLabel(type: string): string {
+  return FURNITURE_CATALOG.find((f) => f.type === type)?.label ?? type.replace(/_/g, " ");
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Transform for one furniture icon: the icon is authored in a 0..1 unit
+ * square at its "natural" (unrotated) orientation, so a 90/270 rotation
+ * must draw it at its pre-swap size and then rotate + recenter it into the
+ * item's current (already width/length-swapped) bounding box -- naively
+ * rotating an already-swapped scale(w,l) box spins it off-center. */
+function furnitureTransform(item: FurnitureItem): string {
+  const rotation = ((item.rotation % 360) + 360) % 360;
+  const swapped = rotation % 180 !== 0;
+  const naturalW = swapped ? item.l : item.w;
+  const naturalL = swapped ? item.w : item.l;
+  return (
+    `translate(${item.x + item.w / 2} ${item.y + item.l / 2}) ` +
+    `rotate(${rotation}) ` +
+    `translate(${-naturalW / 2} ${-naturalL / 2}) ` +
+    `scale(${naturalW} ${naturalL})`
+  );
+}
 
 const CATEGORY: Record<string, "social" | "sleep" | "wet"> = {
   living_room: "social",
@@ -52,7 +102,14 @@ function normalizeDelta(a: number) {
  * swings, north arrow, scale bar) for one floor. Ported from the standalone
  * drafting-table viewer; kept as string-built markup since it's proven and
  * the geometry math doesn't benefit from being re-expressed as JSX. */
-function buildFloorSvg(floor: FloorData, plotLength: number, plotWidth: number): { svg: string; viewBox: string } {
+function buildFloorSvg(
+  floor: FloorData,
+  plotLength: number,
+  plotWidth: number,
+  wallStyle: CompoundWallStyle,
+  gateStyle: GateStyle,
+  excludeFurnitureRoomId: string | null = null
+): { svg: string; viewBox: string } {
   const roomsById = Object.fromEntries(floor.rooms.map((r) => [r.id, r]));
   const isGroundFloor = floor.floor_number === 0;
   const plot = { x: 0, y: 0, w: plotWidth, l: plotLength };
@@ -82,7 +139,37 @@ function buildFloorSvg(floor: FloorData, plotLength: number, plotWidth: number):
   // read as landscaping rather than blank paper. Only meaningful at ground
   // level -- upper floors don't have a yard.
   if (isGroundFloor) {
-    svg += `<rect x="${plot.x}" y="${plot.y}" width="${plot.w}" height="${plot.l}" fill="var(--garden)" stroke="var(--line-soft)" stroke-width="${unit * 0.06}" stroke-dasharray="${unit * 0.3} ${unit * 0.25}" />`;
+    const boundaryStroke =
+      wallStyle === "fence" ? `stroke="var(--line-soft)" stroke-width="${unit * 0.06}" stroke-dasharray="${unit * 0.3} ${unit * 0.25}"` : "";
+    svg += `<rect x="${plot.x}" y="${plot.y}" width="${plot.w}" height="${plot.l}" fill="var(--garden)" ${boundaryStroke} />`;
+
+    // "wall" style: a solid compound wall traced around the plot perimeter,
+    // with a gap left open at the main-gate span (drawn separately below).
+    if (wallStyle === "wall") {
+      const g = floor.main_gate;
+      const corners: Record<string, [{ x: number; y: number }, { x: number; y: number }]> = {
+        north: [{ x: plot.x, y: plot.y }, { x: plot.x + plot.w, y: plot.y }],
+        south: [{ x: plot.x, y: plot.y + plot.l }, { x: plot.x + plot.w, y: plot.y + plot.l }],
+        west: [{ x: plot.x, y: plot.y }, { x: plot.x, y: plot.y + plot.l }],
+        east: [{ x: plot.x + plot.w, y: plot.y }, { x: plot.x + plot.w, y: plot.y + plot.l }],
+      };
+      let wallLines = `<g stroke="var(--wall)" stroke-width="${unit * 0.5}" stroke-linecap="square">`;
+      for (const side of Object.keys(corners)) {
+        const [a, b] = corners[side];
+        if (g && g.side === side) {
+          const horiz = side === "north" || side === "south";
+          const gp1 = { x: g.x, y: g.y };
+          const gp2 = horiz ? { x: g.x + g.width, y: g.y } : { x: g.x, y: g.y + g.width };
+          const [gateStart, gateEnd] = (horiz ? gp1.x <= gp2.x : gp1.y <= gp2.y) ? [gp1, gp2] : [gp2, gp1];
+          wallLines += `<line x1="${a.x}" y1="${a.y}" x2="${gateStart.x}" y2="${gateStart.y}" />`;
+          wallLines += `<line x1="${gateEnd.x}" y1="${gateEnd.y}" x2="${b.x}" y2="${b.y}" />`;
+        } else {
+          wallLines += `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" />`;
+        }
+      }
+      wallLines += `</g>`;
+      svg += wallLines;
+    }
 
     // subtle grass-blade texture across the whole yard
     svg += `<defs><pattern id="grassTexture" width="${unit * 1.2}" height="${unit * 1.2}" patternUnits="userSpaceOnUse">
@@ -208,7 +295,31 @@ function buildFloorSvg(floor: FloorData, plotLength: number, plotWidth: number):
     const y2 = horiz ? g.y : g.y + g.width;
     const labelDX = horiz ? 0 : g.side === "west" ? -unit * 2.4 : unit * 2.4;
     const labelDY = horiz ? (g.side === "north" ? -unit * 1.6 : unit * 2.6) : 0;
-    svg += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--warm)" stroke-width="${unit * 0.35}" />`;
+
+    if (gateStyle === "sliding") {
+      // full-width overhead track, with a solid panel parked at one end (open position)
+      const panelFrac = 0.55;
+      const px2 = x1 + (x2 - x1) * panelFrac;
+      const py2 = y1 + (y2 - y1) * panelFrac;
+      svg += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--wall)" stroke-width="${unit * 0.12}" stroke-dasharray="${unit * 0.5} ${unit * 0.3}" />`;
+      svg += `<line x1="${x1}" y1="${y1}" x2="${px2}" y2="${py2}" stroke="var(--warm)" stroke-width="${unit * 0.4}" stroke-linecap="square" />`;
+    } else {
+      // swing: two leaves, each hinged at a gate post, opened inward toward the plot
+      const midx = (x1 + x2) / 2, midy = (y1 + y2) / 2;
+      const leafLen = g.width / 2;
+      const nx = horiz ? 0 : g.side === "west" ? 1 : -1;
+      const ny = horiz ? (g.side === "north" ? 1 : -1) : 0;
+      for (const [hx, hy] of [[x1, y1], [x2, y2]] as const) {
+        const tipX = hx + nx * leafLen, tipY = hy + ny * leafLen;
+        const a1 = angleOf(hx, hy, tipX, tipY);
+        const a2 = angleOf(hx, hy, midx, midy);
+        const sweep = normalizeDelta(a2 - a1) > 0 ? 1 : 0;
+        svg += `<g stroke="var(--warm)" stroke-width="${unit * 0.3}" fill="none">
+          <line x1="${hx}" y1="${hy}" x2="${tipX}" y2="${tipY}" />
+          <path d="M ${tipX} ${tipY} A ${leafLen} ${leafLen} 0 0 ${sweep} ${midx} ${midy}" stroke-dasharray="${unit * 0.35} ${unit * 0.28}" />
+        </g>`;
+      }
+    }
     svg += `<circle cx="${x1}" cy="${y1}" r="${unit * 0.35}" fill="var(--wall)" />`;
     svg += `<circle cx="${x2}" cy="${y2}" r="${unit * 0.35}" fill="var(--wall)" />`;
     svg += `<text x="${(x1 + x2) / 2 + labelDX}" y="${(y1 + y2) / 2 + labelDY}" text-anchor="middle" class="room-dim" font-size="${unit * 1.1}">MAIN GATE</text>`;
@@ -226,8 +337,10 @@ function buildFloorSvg(floor: FloorData, plotLength: number, plotWidth: number):
     if (r.type === "staircase") {
       svg += `<g transform="translate(${r.x} ${r.y}) scale(${r.width} ${r.length})" stroke-width="${unit * 0.04}">${furnitureIconMarkup("staircase")}</g>`;
     }
-    for (const it of r.furniture ?? []) {
-      svg += `<g transform="translate(${it.x} ${it.y}) scale(${it.w} ${it.l})" stroke-width="${unit * 0.05}">${furnitureIconMarkup(it.type)}</g>`;
+    if (r.id !== excludeFurnitureRoomId) {
+      for (const it of r.furniture ?? []) {
+        svg += `<g transform="${furnitureTransform(it)}" stroke-width="${unit * 0.05}">${furnitureIconMarkup(it.type)}</g>`;
+      }
     }
     svg += `<text x="${cx}" y="${cy - labelSize * 0.35}" text-anchor="middle" class="room-label" font-size="${labelSize}" ${halo}>${r.label.toUpperCase()}</text>`;
     svg += `<text x="${cx}" y="${cy + dimSize * 1.15}" text-anchor="middle" class="room-dim" font-size="${dimSize}" ${halo}>(${fmt(r.width)}&#8242; &times; ${fmt(r.length)}&#8242;)</text>`;
@@ -330,17 +443,116 @@ function sanitizeFileName(label: string): string {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "floor-plan";
 }
 
-export default function FloorPlanViewer({ plan }: { plan: PlanData }) {
+/** Wraps a JPEG image in a minimal, dependency-free single-page PDF (one
+ * Image XObject painted to fill the page). Avoids pulling in a PDF library
+ * for what is otherwise a one-image document. Byte offsets in the xref table
+ * must exactly match object start positions, hence the manual bookkeeping. */
+function buildMinimalPdf(
+  jpegBytes: Uint8Array,
+  imgWidthPx: number,
+  imgHeightPx: number,
+  pageWidthPt: number,
+  pageHeightPt: number
+): Uint8Array {
+  const enc = new TextEncoder();
+  const chunks: Uint8Array[] = [];
+  const offsets: number[] = [0];
+  let pos = 0;
+
+  function push(bytes: Uint8Array) {
+    chunks.push(bytes);
+    pos += bytes.length;
+  }
+  function pushText(s: string) {
+    push(enc.encode(s));
+  }
+
+  pushText("%PDF-1.4\n");
+
+  offsets[1] = pos;
+  pushText("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+  offsets[2] = pos;
+  pushText("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+
+  offsets[3] = pos;
+  pushText(
+    `3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidthPt} ${pageHeightPt}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n`
+  );
+
+  offsets[4] = pos;
+  pushText(
+    `4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${imgWidthPx} /Height ${imgHeightPx} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`
+  );
+  push(jpegBytes);
+  pushText("\nendstream\nendobj\n");
+
+  const content = `q ${pageWidthPt} 0 0 ${pageHeightPt} 0 0 cm /Im0 Do Q`;
+  const contentBytes = enc.encode(content);
+  offsets[5] = pos;
+  pushText(`5 0 obj\n<< /Length ${contentBytes.length} >>\nstream\n`);
+  push(contentBytes);
+  pushText("\nendstream\nendobj\n");
+
+  const xrefOffset = pos;
+  let xref = `xref\n0 6\n0000000000 65535 f \n`;
+  for (let i = 1; i <= 5; i++) {
+    xref += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
+  }
+  pushText(xref);
+  pushText(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`);
+
+  const total = new Uint8Array(pos);
+  let o = 0;
+  for (const c of chunks) {
+    total.set(c, o);
+    o += c.length;
+  }
+  return total;
+}
+
+function dataUrlToBytes(dataUrl: string): Uint8Array {
+  const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+export default function FloorPlanViewer({
+  plan,
+  projectId,
+  floorPlanId,
+  onFurnitureSaved,
+}: {
+  plan: PlanData;
+  projectId?: number;
+  floorPlanId?: number;
+  onFurnitureSaved?: (planData: PlanData) => void;
+}) {
   const [activeFloorIdx, setActiveFloorIdx] = useState(0);
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; room: RoomData } | null>(null);
-  const [downloading, setDownloading] = useState(false);
+  const [downloading, setDownloading] = useState<null | "png" | "pdf">(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
+  const editable = projectId != null && floorPlanId != null;
+  const [editingFloorIdx, setEditingFloorIdx] = useState<number | null>(null);
+  const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
+  const [localFurniture, setLocalFurniture] = useState<Record<string, FurnitureItem[]>>({});
+  const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
+  const [addType, setAddType] = useState(FURNITURE_CATALOG[0].type);
+  const [savingFurniture, setSavingFurniture] = useState(false);
+  const [furnitureError, setFurnitureError] = useState<string | null>(null);
+  const dragOffsetRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
+
   const floor = plan.floors[activeFloorIdx];
+  const isEditingThisFloor = editingFloorIdx === activeFloorIdx;
+  const wallStyle = plan.meta.compound_wall_style ?? "wall";
+  const gateStyle = plan.meta.gate_style ?? "swing";
   const { svg, viewBox } = useMemo(
-    () => buildFloorSvg(floor, plan.meta.plot_length, plan.meta.plot_width),
-    [floor, plan.meta.plot_length, plan.meta.plot_width]
+    () => buildFloorSvg(floor, plan.meta.plot_length, plan.meta.plot_width, wallStyle, gateStyle, isEditingThisFloor ? editingRoomId : null),
+    [floor, plan.meta.plot_length, plan.meta.plot_width, wallStyle, gateStyle, isEditingThisFloor, editingRoomId]
   );
   const rows = useMemo(() => [...floor.rooms].sort((a, b) => b.area - a.area), [floor]);
   const totalArea = useMemo(() => rows.reduce((s, r) => s + r.area, 0), [rows]);
@@ -365,13 +577,145 @@ export default function FloorPlanViewer({ plan }: { plan: PlanData }) {
 
   function handleClick(e: React.MouseEvent<HTMLDivElement>) {
     const roomId = findRoomIdFromEvent(e);
+    if (isEditingThisFloor) {
+      if (roomId) setEditingRoomId(roomId);
+      return;
+    }
     setActiveRoomId((prev) => (prev === roomId ? null : roomId));
   }
 
-  function handleDownload() {
+  function startEditFurniture() {
+    const init: Record<string, FurnitureItem[]> = {};
+    for (const r of floor.rooms) init[r.id] = (r.furniture ?? []).map((f) => ({ ...f }));
+    setLocalFurniture(init);
+    setEditingFloorIdx(activeFloorIdx);
+    setEditingRoomId(null);
+    setFurnitureError(null);
+  }
+
+  function cancelEditFurniture() {
+    setEditingFloorIdx(null);
+    setEditingRoomId(null);
+    setLocalFurniture({});
+    setFurnitureError(null);
+  }
+
+  function screenToSvgPoint(clientX: number, clientY: number): { x: number; y: number } {
     const svgEl = svgRef.current;
-    if (!svgEl || downloading) return;
-    setDownloading(true);
+    if (!svgEl) return { x: 0, y: 0 };
+    const pt = svgEl.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const ctm = svgEl.getScreenCTM();
+    if (!ctm) return { x: 0, y: 0 };
+    const p = pt.matrixTransform(ctm.inverse());
+    return { x: p.x, y: p.y };
+  }
+
+  function startDrag(e: React.MouseEvent, roomId: string, idx: number) {
+    e.stopPropagation();
+    e.preventDefault();
+    const item = localFurniture[roomId]?.[idx];
+    if (!item) return;
+    const p = screenToSvgPoint(e.clientX, e.clientY);
+    dragOffsetRef.current = { dx: p.x - item.x, dy: p.y - item.y };
+    setDraggingIdx(idx);
+  }
+
+  useEffect(() => {
+    if (draggingIdx === null || !editingRoomId) return;
+    const room = floor.rooms.find((r) => r.id === editingRoomId);
+    if (!room) return;
+
+    function handleMove(e: MouseEvent) {
+      const p = screenToSvgPoint(e.clientX, e.clientY);
+      setLocalFurniture((prev) => {
+        const items = prev[editingRoomId!] ?? [];
+        const item = items[draggingIdx!];
+        if (!item || !room) return prev;
+        const maxX = Math.max(room.x + room.width - item.w, room.x);
+        const maxY = Math.max(room.y + room.length - item.l, room.y);
+        const nx = Math.min(Math.max(p.x - dragOffsetRef.current.dx, room.x), maxX);
+        const ny = Math.min(Math.max(p.y - dragOffsetRef.current.dy, room.y), maxY);
+        const updated = [...items];
+        updated[draggingIdx!] = { ...item, x: round2(nx), y: round2(ny) };
+        return { ...prev, [editingRoomId!]: updated };
+      });
+    }
+    function handleUp() {
+      setDraggingIdx(null);
+    }
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draggingIdx, editingRoomId, floor]);
+
+  function addFurniture(roomId: string, catalogType: string) {
+    const room = floor.rooms.find((r) => r.id === roomId);
+    const spec = FURNITURE_CATALOG.find((f) => f.type === catalogType);
+    if (!room || !spec) return;
+    const w = Math.min(spec.w, room.width);
+    const l = Math.min(spec.l, room.length);
+    const x = room.x + (room.width - w) / 2;
+    const y = room.y + (room.length - l) / 2;
+    setLocalFurniture((prev) => ({
+      ...prev,
+      [roomId]: [...(prev[roomId] ?? []), { type: catalogType, x: round2(x), y: round2(y), w, l, rotation: 0 }],
+    }));
+  }
+
+  function removeFurniture(roomId: string, idx: number) {
+    setLocalFurniture((prev) => ({
+      ...prev,
+      [roomId]: (prev[roomId] ?? []).filter((_, i) => i !== idx),
+    }));
+  }
+
+  function rotateFurniture(roomId: string, idx: number) {
+    const room = floor.rooms.find((r) => r.id === roomId);
+    if (!room) return;
+    setLocalFurniture((prev) => {
+      const items = prev[roomId] ?? [];
+      const item = items[idx];
+      if (!item) return prev;
+      const nw = item.l;
+      const nl = item.w;
+      const maxX = Math.max(room.x + room.width - nw, room.x);
+      const maxY = Math.max(room.y + room.length - nl, room.y);
+      const nx = Math.min(item.x, maxX);
+      const ny = Math.min(item.y, maxY);
+      const updated = [...items];
+      updated[idx] = { ...item, w: nw, l: nl, x: round2(nx), y: round2(ny), rotation: (item.rotation + 90) % 360 };
+      return { ...prev, [roomId]: updated };
+    });
+  }
+
+  async function saveFurniture() {
+    if (!editable || editingFloorIdx === null || savingFurniture) return;
+    setSavingFurniture(true);
+    setFurnitureError(null);
+    try {
+      const updated = await api.updateFurniture(projectId!, floorPlanId!, {
+        floor_number: floor.floor_number,
+        furniture_by_room: localFurniture,
+      });
+      onFurnitureSaved?.(updated.plan_data);
+      setEditingFloorIdx(null);
+      setEditingRoomId(null);
+    } catch (err) {
+      setFurnitureError(err instanceof ApiError ? err.message : "Could not save furniture layout");
+    } finally {
+      setSavingFurniture(false);
+    }
+  }
+
+  function renderToCanvas(): Promise<HTMLCanvasElement> {
+    const svgEl = svgRef.current;
+    if (!svgEl) return Promise.reject(new Error("no svg"));
 
     const clone = svgEl.cloneNode(true) as SVGSVGElement;
     clone.removeAttribute("class");
@@ -397,36 +741,68 @@ export default function FloorPlanViewer({ plan }: { plan: PlanData }) {
     const svgString = new XMLSerializer().serializeToString(clone);
     const svgUrl = URL.createObjectURL(new Blob([svgString], { type: "image/svg+xml;charset=utf-8" }));
 
-    const cleanup = () => {
-      URL.revokeObjectURL(svgUrl);
-      setDownloading(false);
-    };
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(svgUrl);
+        const canvas = document.createElement("canvas");
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          reject(new Error("no canvas context"));
+          return;
+        }
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, targetWidth, targetHeight);
+        ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+        resolve(canvas);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(svgUrl);
+        reject(new Error("svg failed to rasterize"));
+      };
+      img.src = svgUrl;
+    });
+  }
 
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = targetWidth;
-      canvas.height = targetHeight;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        cleanup();
-        return;
-      }
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, targetWidth, targetHeight);
-      ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
-      canvas.toBlob((blob) => {
-        cleanup();
-        if (!blob) return;
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = `${sanitizeFileName(floor.label)}-floor-plan.png`;
-        link.click();
-        URL.revokeObjectURL(link.href);
-      }, "image/png");
-    };
-    img.onerror = cleanup;
-    img.src = svgUrl;
+  async function handleDownloadPng() {
+    if (downloading) return;
+    setDownloading("png");
+    try {
+      const canvas = await renderToCanvas();
+      const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+      if (!blob) return;
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `${sanitizeFileName(floor.label)}-floor-plan.png`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  async function handleDownloadPdf() {
+    if (downloading) return;
+    setDownloading("pdf");
+    try {
+      const canvas = await renderToCanvas();
+      const jpegDataUrl = canvas.toDataURL("image/jpeg", 0.92);
+      const jpegBytes = dataUrlToBytes(jpegDataUrl);
+      // 200 DPI: physical page size in points (1/72in) derived from pixel size.
+      const pageWidthPt = (canvas.width * 72) / 200;
+      const pageHeightPt = (canvas.height * 72) / 200;
+      const pdfBytes = buildMinimalPdf(jpegBytes, canvas.width, canvas.height, pageWidthPt, pageHeightPt);
+      const blob = new Blob([Uint8Array.from(pdfBytes)], { type: "application/pdf" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `${sanitizeFileName(floor.label)}-floor-plan.pdf`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+    } finally {
+      setDownloading(null);
+    }
   }
 
   return (
@@ -460,9 +836,27 @@ export default function FloorPlanViewer({ plan }: { plan: PlanData }) {
               <span className="drawing-panel-floor">
                 {plan.meta.facing.charAt(0).toUpperCase() + plan.meta.facing.slice(1)} facing
               </span>
-              <button type="button" className="btn btn-secondary drawing-panel-download" onClick={handleDownload} disabled={downloading}>
-                {downloading ? "Preparing…" : "Download PNG"}
+              <button type="button" className="btn btn-secondary drawing-panel-download" onClick={handleDownloadPng} disabled={!!downloading}>
+                {downloading === "png" ? "Preparing…" : "Download PNG"}
               </button>
+              <button type="button" className="btn btn-secondary drawing-panel-download" onClick={handleDownloadPdf} disabled={!!downloading}>
+                {downloading === "pdf" ? "Preparing…" : "Download PDF"}
+              </button>
+              {editable && !isEditingThisFloor && (
+                <button type="button" className="btn btn-secondary drawing-panel-download" onClick={startEditFurniture}>
+                  Edit furniture
+                </button>
+              )}
+              {editable && isEditingThisFloor && (
+                <>
+                  <button type="button" className="btn btn-primary drawing-panel-download" onClick={saveFurniture} disabled={savingFurniture}>
+                    {savingFurniture ? "Saving…" : "Save layout"}
+                  </button>
+                  <button type="button" className="btn btn-secondary drawing-panel-download" onClick={cancelEditFurniture} disabled={savingFurniture}>
+                    Cancel
+                  </button>
+                </>
+              )}
             </div>
           </div>
           <div
@@ -475,9 +869,25 @@ export default function FloorPlanViewer({ plan }: { plan: PlanData }) {
               ref={svgRef}
               viewBox={viewBox}
               className={activeRoomId ? `has-active` : ""}
-              dangerouslySetInnerHTML={{ __html: svg }}
-            />
-            <style>{`.room-outline[data-room="${activeRoomId}"] { stroke: var(--accent) !important; }`}</style>
+            >
+              <g dangerouslySetInnerHTML={{ __html: svg }} />
+              {isEditingThisFloor && editingRoomId && (
+                <g>
+                  {(localFurniture[editingRoomId] ?? []).map((item, idx) => (
+                    <g
+                      key={idx}
+                      transform={furnitureTransform(item)}
+                      className={`furniture-editable ${draggingIdx === idx ? "is-dragging" : ""}`}
+                      onMouseDown={(e) => startDrag(e, editingRoomId, idx)}
+                    >
+                      <rect x="0" y="0" width="1" height="1" fill="transparent" />
+                      <g dangerouslySetInnerHTML={{ __html: furnitureIconMarkup(item.type) }} />
+                    </g>
+                  ))}
+                </g>
+              )}
+            </svg>
+            <style>{`.room-outline[data-room="${isEditingThisFloor ? editingRoomId : activeRoomId}"] { stroke: var(--accent) !important; }`}</style>
             {tooltip && (
               <div
                 className="fpv-tooltip"
@@ -560,6 +970,7 @@ export default function FloorPlanViewer({ plan }: { plan: PlanData }) {
           </div>
         </div>
 
+        <div className="fpv-side">
         <div className="schedule-panel card">
           <h2>Room schedule</h2>
           <table className="schedule">
@@ -596,6 +1007,54 @@ export default function FloorPlanViewer({ plan }: { plan: PlanData }) {
             <span>{rows.length} rooms</span>
             <span>{fmt0(totalArea)} sq ft</span>
           </div>
+        </div>
+
+        {isEditingThisFloor && (
+          <div className="furniture-editor card">
+            <h2>Furniture</h2>
+            {furnitureError && <div className="error-banner">{furnitureError}</div>}
+            {!editingRoomId ? (
+              <p className="muted">Click a room in the plan to edit its furniture.</p>
+            ) : (
+              <>
+                <div className="furniture-editor-room">
+                  {floor.rooms.find((r) => r.id === editingRoomId)?.label ?? editingRoomId}
+                </div>
+                <ul className="furniture-list">
+                  {(localFurniture[editingRoomId] ?? []).map((item, idx) => (
+                    <li key={idx} className={draggingIdx === idx ? "is-dragging" : ""}>
+                      <span>{furnitureLabel(item.type)}</span>
+                      <div className="furniture-item-actions">
+                        <button type="button" title="Rotate 90°" onClick={() => rotateFurniture(editingRoomId, idx)}>
+                          ⟳
+                        </button>
+                        <button type="button" title="Remove" onClick={() => removeFurniture(editingRoomId, idx)}>
+                          ×
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                  {(localFurniture[editingRoomId] ?? []).length === 0 && (
+                    <li className="muted">No furniture in this room yet.</li>
+                  )}
+                </ul>
+                <div className="furniture-add-row">
+                  <select value={addType} onChange={(e) => setAddType(e.target.value)}>
+                    {FURNITURE_CATALOG.map((f) => (
+                      <option key={f.type} value={f.type}>
+                        {f.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" className="btn btn-secondary" onClick={() => addFurniture(editingRoomId, addType)}>
+                    Add
+                  </button>
+                </div>
+                <p className="muted furniture-hint">Drag items in the plan to reposition them.</p>
+              </>
+            )}
+          </div>
+        )}
         </div>
       </div>
     </div>

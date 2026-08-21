@@ -67,9 +67,20 @@ def generate_plan_for_requirement(
 
     plan_data, total_built_up_area = generate_floor_plan(req_in)
 
-    from app.services.cost_estimator import estimate_cost
+    from app.services.cost_estimator import estimate_boq, estimate_construction_timeline, estimate_cost, estimate_far
 
     cost = estimate_cost(total_built_up_area, req_in.budget)
+    plot_area = req_in.plot_length * req_in.plot_width
+    far = estimate_far(total_built_up_area, plot_area)
+    plan_data["meta"]["cost_estimate"] = cost
+    plan_data["meta"]["boq"] = estimate_boq(total_built_up_area)
+    plan_data["meta"]["construction_timeline"] = estimate_construction_timeline(total_built_up_area, req_in.floors)
+    plan_data["meta"]["far"] = far
+    if far["exceeds_typical_limit"]:
+        warnings.append(
+            f"Floor-area-ratio (FAR) of the generated plan is {far['far']}, above the typical residential "
+            f"limit of {far['max_far']} -- confirm local municipal FAR/FSI norms before proceeding."
+        )
 
     floor_plan = floorplan_crud.create_floor_plan(
         db, project_id, requirement_id, plan_data, total_built_up_area, cost["recommended_cost"], current_user.id

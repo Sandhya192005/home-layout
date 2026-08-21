@@ -26,6 +26,8 @@ export interface Project extends AuditFields {
 
 export type Facing = "north" | "south" | "east" | "west";
 export type FloorType = "duplex" | "independent";
+export type CompoundWallStyle = "none" | "wall" | "fence";
+export type GateStyle = "swing" | "sliding";
 
 export const ADDITIONAL_ROOM_TYPES = [
   "home_office",
@@ -54,6 +56,8 @@ export interface RequirementInput {
   balconies: number;
   cars: number;
   two_wheelers: number;
+  compound_wall_style: CompoundWallStyle;
+  gate_style: GateStyle;
   floors: number;
   floor_type: FloorType;
   budget: number;
@@ -158,6 +162,35 @@ export interface FloorData {
   has_staircase: boolean;
 }
 
+export interface CostEstimate {
+  total_built_up_area: number;
+  tier_estimates: Record<string, number>;
+  recommended_tier: string;
+  recommended_cost: number;
+  within_budget: boolean;
+}
+
+export interface BoqEstimate {
+  cement_bags: number;
+  steel_kg: number;
+  bricks: number;
+  sand_cft: number;
+  aggregate_cft: number;
+  paint_liters: number;
+}
+
+export interface ConstructionTimeline {
+  phases_weeks: Record<string, number>;
+  total_weeks: number;
+  total_months: number;
+}
+
+export interface FarEstimate {
+  far: number;
+  max_far: number;
+  exceeds_typical_limit: boolean;
+}
+
 export interface PlanData {
   meta: {
     plot_length: number;
@@ -166,8 +199,14 @@ export interface PlanData {
     facing: Facing;
     floors: number;
     vastu_compliant: boolean;
+    compound_wall_style?: CompoundWallStyle;
+    gate_style?: GateStyle;
     total_built_up_area: number;
     buildable_footprint: { x: number; y: number; width: number; length: number };
+    cost_estimate?: CostEstimate;
+    boq?: BoqEstimate;
+    construction_timeline?: ConstructionTimeline;
+    far?: FarEstimate;
   };
   floors: FloorData[];
 }
@@ -186,4 +225,24 @@ export interface FloorPlan extends AuditFields {
 export interface FloorPlanGenerateResponse {
   floor_plan: FloorPlan;
   warnings: string[];
+}
+
+export interface FurnitureLayoutUpdateInput {
+  floor_number: number;
+  furniture_by_room: Record<string, FurnitureItem[]>;
+}
+
+export interface FloorPlanShare extends AuditFields {
+  id: number;
+  floor_plan_id: number;
+  token: string;
+}
+
+export interface PublicFloorPlan {
+  project_name: string;
+  version: number;
+  status: string;
+  plan_data: PlanData;
+  total_built_up_area: number;
+  estimated_cost: number;
 }

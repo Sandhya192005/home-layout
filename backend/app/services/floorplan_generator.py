@@ -889,6 +889,8 @@ def generate_floor_plan(req: RequirementCreate) -> dict:
             "facing": req.facing,
             "floors": req.floors,
             "vastu_compliant": req.vastu_compliant,
+            "compound_wall_style": req.compound_wall_style,
+            "gate_style": req.gate_style,
             "total_built_up_area": round(total_built_up_area, 2),
             "buildable_footprint": {"x": round(base_rect["x"], 2), "y": round(base_rect["y"], 2),
                                      "width": round(base_rect["w"], 2), "length": round(base_rect["l"], 2)},

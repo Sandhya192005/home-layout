@@ -5,6 +5,20 @@ from pydantic import BaseModel, ConfigDict
 from app.schemas.mixins import AuditRead
 
 
+class FurnitureItemUpdate(BaseModel):
+    type: str
+    x: float
+    y: float
+    w: float
+    l: float
+    rotation: float = 0
+
+
+class FurnitureLayoutUpdate(BaseModel):
+    floor_number: int
+    furniture_by_room: dict[str, list[FurnitureItemUpdate]]
+
+
 class FloorPlanRead(AuditRead):
     model_config = ConfigDict(from_attributes=True)
 

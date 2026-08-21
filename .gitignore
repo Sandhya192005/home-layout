@@ -6,3 +6,4 @@ backend/.env
 .env
 *.db
 backend/scripts/_migration_test.db
+backend/uvicorn_log.txt

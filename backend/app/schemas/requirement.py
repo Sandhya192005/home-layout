@@ -25,6 +25,8 @@ class RequirementBase(BaseModel):
 
     cars: int = Field(default=1, ge=0, le=10)
     two_wheelers: int = Field(default=1, ge=0, le=10)
+    compound_wall_style: Literal["none", "wall", "fence"] = "wall"
+    gate_style: Literal["swing", "sliding"] = "swing"
 
     floors: int = Field(default=1, ge=1, le=5)
     floor_type: Literal["duplex", "independent"] = "duplex"

@@ -34,6 +34,8 @@ class Requirement(Base, AuditMixin):
     # Parking
     cars: Mapped[int] = mapped_column(Integer, default=1)
     two_wheelers: Mapped[int] = mapped_column(Integer, default=1)
+    compound_wall_style: Mapped[str] = mapped_column(String(20), default="wall")  # none | wall | fence
+    gate_style: Mapped[str] = mapped_column(String(20), default="swing")  # swing | sliding
 
     # Structure
     floors: Mapped[int] = mapped_column(Integer, default=1)
