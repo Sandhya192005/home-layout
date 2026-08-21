@@ -19,7 +19,8 @@ class RequirementBase(BaseModel):
     has_pooja_room: bool = False
     has_study_room: bool = False
     has_utility_room: bool = True
-    entrance_type: Literal["veranda", "foyer"] = "veranda"
+    has_veranda: bool = True
+    has_foyer: bool = False
     balconies: int = Field(default=0, ge=0, le=12)
 
     cars: int = Field(default=1, ge=0, le=10)

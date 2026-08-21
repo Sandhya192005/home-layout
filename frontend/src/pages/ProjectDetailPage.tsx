@@ -18,7 +18,8 @@ const DEFAULT_REQUIREMENT: RequirementInput = {
   has_pooja_room: false,
   has_study_room: false,
   has_utility_room: true,
-  entrance_type: "veranda",
+  has_veranda: true,
+  has_foyer: false,
   balconies: 0,
   cars: 1,
   two_wheelers: 1,
@@ -149,17 +150,6 @@ export default function ProjectDetailPage() {
                 <option value="west">West</option>
               </select>
             </div>
-            <div className="field">
-              <label htmlFor="entrance_type">Entrance</label>
-              <select
-                id="entrance_type"
-                value={form.entrance_type}
-                onChange={(e) => update("entrance_type", e.target.value as RequirementInput["entrance_type"])}
-              >
-                <option value="veranda">Veranda (covered porch)</option>
-                <option value="foyer">Foyer (enclosed hall)</option>
-              </select>
-            </div>
           </div>
 
           <div className="field-row">
@@ -237,6 +227,22 @@ export default function ProjectDetailPage() {
             <label className="checkbox-row">
               <input type="checkbox" checked={form.vastu_compliant} onChange={(e) => update("vastu_compliant", e.target.checked)} />
               Vastu compliant
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={form.has_veranda}
+                onChange={(e) => update("has_veranda", e.target.checked)}
+              />
+              Add veranda (covered porch entrance)
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={form.has_foyer}
+                onChange={(e) => update("has_foyer", e.target.checked)}
+              />
+              Add foyer (enclosed hall entrance)
             </label>
             <label className="checkbox-row">
               <input

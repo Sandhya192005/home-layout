@@ -46,6 +46,7 @@ from app.utils.constants import (
 
 FALLBACK_ZONE_ORDER = ["C", "N", "S", "E", "W", "NE", "NW", "SE", "SW"]
 STAIRCASE_WIDTH = 5.0
+VERANDA_DEPTH = 6.0
 ENTRANCE_ROOM_TYPES = ("veranda", "foyer")
 
 # whichever compass edge the plot faces is where the street (and therefore
@@ -56,6 +57,7 @@ FRONT_ZONES_BY_FACING = {
     "east": ["E", "NE", "SE"],
     "west": ["W", "NW", "SW"],
 }
+FRONT_ZONE_LABEL = {"north": "N", "south": "S", "east": "E", "west": "W"}
 
 
 @dataclass
@@ -137,10 +139,16 @@ def build_room_program(req: RequirementCreate) -> list[RoomInstance]:
         seq += 1
         return seq
 
-    # Ground floor common rooms
-    entrance_room = _make_room(req.entrance_type, 0, nxt())
-    entrance_room.zones = FRONT_ZONES_BY_FACING[req.facing]
-    rooms.append(entrance_room)
+    # Ground floor common rooms -- veranda (covered porch) and foyer (enclosed
+    # hall) are independent opt-ins, not alternatives: a plot can have either,
+    # both (porch leading into a hall), or neither (front door opens straight
+    # into the living room).
+    for entrance_type, wanted in (("veranda", req.has_veranda), ("foyer", req.has_foyer)):
+        if not wanted:
+            continue
+        entrance_room = _make_room(entrance_type, 0, nxt())
+        entrance_room.zones = FRONT_ZONES_BY_FACING[req.facing]
+        rooms.append(entrance_room)
     if req.has_living_room:
         rooms.append(_make_room("living_room", 0, nxt()))
     if req.has_dining_room:
@@ -573,25 +581,40 @@ def _build_doors(rooms: list[RoomInstance], outline: dict, facing: str, entrance
                       "width": DOOR_WIDTH_MAIN, "center_x": round(cx, 2), "center_y": round(cy, 2)})
 
     rects = [r for r in rooms if r.rect]
+
+    # Every candidate wall shared by two rooms, wide enough for a doorway.
+    candidates: list[tuple[float, tuple[float, float, float, float], RoomInstance, RoomInstance]] = []
     for i, a in enumerate(rects):
-        best = None
-        best_len = 0.0
-        for b in rects:
-            if a is b:
-                continue
+        for b in rects[i + 1:]:
             shared = geo.shared_segment(a.rect, b.rect)
             if not shared:
                 continue
             _, _, seg = shared
             length = geo.segment_length(seg)
-            if length > best_len:
-                best_len = length
-                best = (b, seg)
-        if best and best_len >= DOOR_WIDTH_INTERNAL:
-            b, seg = best
-            cx, cy = geo.midpoint(seg)
-            doors.append({"type": "internal", "room_id": a.room_id, "connects_to": b.room_id,
-                          "width": DOOR_WIDTH_INTERNAL, "center_x": round(cx, 2), "center_y": round(cy, 2)})
+            if length >= DOOR_WIDTH_INTERNAL:
+                candidates.append((length, seg, a, b))
+
+    # Connect every room into a single spanning tree (Kruskal's, widest wall
+    # first) instead of letting each room pick only its own single best
+    # neighbor -- that greedy approach could silently leave a whole cluster of
+    # rooms (e.g. a bedroom wing) with doors only to each other and no route
+    # at all back to the living room / rest of the house.
+    parent = {r.room_id: r.room_id for r in rects}
+
+    def find(room_id: str) -> str:
+        while parent[room_id] != room_id:
+            parent[room_id] = parent[parent[room_id]]
+            room_id = parent[room_id]
+        return room_id
+
+    for length, seg, a, b in sorted(candidates, key=lambda c: -c[0]):
+        root_a, root_b = find(a.room_id), find(b.room_id)
+        if root_a == root_b:
+            continue
+        parent[root_a] = root_b
+        cx, cy = geo.midpoint(seg)
+        doors.append({"type": "internal", "room_id": a.room_id, "connects_to": b.room_id,
+                      "width": DOOR_WIDTH_INTERNAL, "center_x": round(cx, 2), "center_y": round(cy, 2)})
     return doors
 
 
@@ -648,8 +671,11 @@ def generate_floor_plan(req: RequirementCreate) -> dict:
     total_built_up_area = 0.0
 
     for floor_idx in range(req.floors):
-        floor_rooms = [r for r in rooms if r.floor_index == floor_idx and r.room_type != "staircase"]
+        floor_rooms = [
+            r for r in rooms if r.floor_index == floor_idx and r.room_type not in ("staircase", "veranda")
+        ]
         stair_room = next((r for r in rooms if r.floor_index == floor_idx and r.room_type == "staircase"), None)
+        veranda_room = next((r for r in rooms if r.floor_index == floor_idx and r.room_type == "veranda"), None)
 
         if floor_idx == 0:
             parking, outline, room_area_rect = compute_parking(
@@ -662,9 +688,25 @@ def generate_floor_plan(req: RequirementCreate) -> dict:
             stair_room.rect = dict(stair_strip)
             stair_room.zone = "SW" if stair_side == "west" else "SE"
 
-        layout_floor(floor_rooms, room_area_rect, req.vastu_compliant)
+        # A veranda is a covered porch in front of the door, not just another
+        # interior room -- carve it as a full-width strip off the front edge
+        # (same technique as the staircase strip) so it always spans the
+        # facade and sits between the entrance and every other room, rather
+        # than landing as a single Vastu-grid cell that might only be a
+        # corner sliver of the front wall.
+        layout_rect = room_area_rect
+        if veranda_room is not None and floor_idx == 0:
+            veranda_strip, layout_rect = geo.split_strip(room_area_rect, _front_edge(req.facing), VERANDA_DEPTH)
+            veranda_room.rect = veranda_strip
+            veranda_room.zone = FRONT_ZONE_LABEL[req.facing]
 
-        all_placed = [r for r in floor_rooms if r.rect] + ([stair_room] if stair_room and stair_room.rect else [])
+        layout_floor(floor_rooms, layout_rect, req.vastu_compliant)
+
+        all_placed = (
+            [r for r in floor_rooms if r.rect]
+            + ([stair_room] if stair_room and stair_room.rect else [])
+            + ([veranda_room] if veranda_room and veranda_room.rect else [])
+        )
         floor_outline = outline if floor_idx == 0 else base_rect
 
         room_dicts = []
@@ -688,8 +730,14 @@ def generate_floor_plan(req: RequirementCreate) -> dict:
         windows = _build_windows(all_placed, floor_outline)
         entrance_id = None
         if floor_idx == 0:
-            entrance_candidates = [r for r in all_placed if r.room_type in ENTRANCE_ROOM_TYPES] or \
-                [r for r in all_placed if r.room_type == "living_room"] or all_placed
+            # if both a veranda and a foyer are present, the main door sits on
+            # the veranda -- it's the outermost, street-facing room
+            entrance_candidates = (
+                [r for r in all_placed if r.room_type == "veranda"]
+                or [r for r in all_placed if r.room_type == "foyer"]
+                or [r for r in all_placed if r.room_type == "living_room"]
+                or all_placed
+            )
             entrance_id = entrance_candidates[0].room_id if entrance_candidates else None
         doors = _build_doors(all_placed, floor_outline, req.facing, entrance_id)
         walls = _build_walls(floor_outline, room_dicts)

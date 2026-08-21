@@ -6,6 +6,7 @@ and are surfaced to the client alongside the generated plan.
 import math
 
 from app.schemas.requirement import RequirementCreate
+from app.services import geometry as geo
 from app.utils.constants import (
     CAR_PARKING_SIZE,
     COST_TIERS,
@@ -18,6 +19,31 @@ from app.utils.constants import (
 def _setback(dimension: float, kind: str) -> float:
     rule = SETBACK_RULES[kind]
     return min(max(dimension * rule["fraction"], rule["min"]), rule["max"])
+
+
+def _ground_floor_layout_rect(req: RequirementCreate) -> dict:
+    """The exact rect actually available for ground-floor room layout, after
+    the staircase strip (multi-floor), parking carve, and veranda strip are
+    all removed -- reuses the real generator pipeline instead of
+    re-deriving an approximate formula that could drift out of sync with it,
+    since each of those carves can eat significantly into one axis without
+    reducing the *total area* estimate by much."""
+    from app.services import floorplan_generator as fpg  # local import: avoid a module-load cycle
+
+    base_rect = fpg.compute_buildable_rect(req.plot_length, req.plot_width, req.facing)
+    if req.floors > 1:
+        stair_side = "east" if req.facing == "west" else "west"
+        _, rooms_base_rect = geo.split_strip(base_rect, stair_side, fpg.STAIRCASE_WIDTH)
+    else:
+        rooms_base_rect = base_rect
+
+    front_sb = _setback(req.plot_length if req.facing in ("north", "south") else req.plot_width, "front")
+    _, _, layout_rect = fpg.compute_parking(rooms_base_rect, req.facing, front_sb, req.cars, req.two_wheelers)
+
+    if req.has_veranda:
+        _, layout_rect = geo.split_strip(layout_rect, fpg._front_edge(req.facing), fpg.VERANDA_DEPTH)
+
+    return layout_rect
 
 
 def _estimate_parking_area_carved_from_footprint(req: RequirementCreate, buildable_width: float) -> float:
@@ -95,6 +121,22 @@ def validate_requirement(req: RequirementCreate) -> tuple[list[str], list[str]]:
 
     if buildable_area_per_floor <= 0:
         errors.append("Mandatory setbacks consume the entire plot; no buildable area remains.")
+        return errors, warnings
+
+    # A plot can have "enough" total area while being a razor-thin strip in one
+    # direction once the staircase strip, parking, and veranda are all carved
+    # out -- that produces rooms too narrow to fit real furniture or even a
+    # doorway, even though the raw area math alone looks fine.
+    min_buildable_dim = 12.0
+    layout_rect = _ground_floor_layout_rect(req)
+    if layout_rect["w"] < min_buildable_dim or layout_rect["l"] < min_buildable_dim:
+        errors.append(
+            f"After setbacks, parking{', the staircase,' if req.floors > 1 else ''}"
+            f"{' and veranda' if req.has_veranda else ''} are carved out, the remaining "
+            f"footprint for rooms is only {layout_rect['w']:.1f} x {layout_rect['l']:.1f} ft -- one direction "
+            f"is narrower than the {min_buildable_dim:.0f} ft needed to fit real rooms and doorways. Use a "
+            "larger plot, fewer vehicles, or a different facing."
+        )
         return errors, warnings
 
     min_required = estimate_minimum_plot_area(req)

@@ -152,7 +152,7 @@ ROOM_LIBRARY = {
         "furniture": [{"type": "chair", "w": 2, "l": 2}, {"type": "planters", "w": 2, "l": 1}],
     },
     "foyer": {
-        # an enclosed entrance hall, alternative to veranda -- same front-zone pinning
+        # an enclosed entrance hall -- independent of veranda, same front-zone pinning
         "label": "Foyer", "weight": 0.25, "priority": 7, "min_w": 5, "min_l": 5,
         "zones": ["N", "NE", "E", "W"], "habitable": False, "furniture": [],
     },

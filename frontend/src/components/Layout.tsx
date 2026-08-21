@@ -10,7 +10,7 @@ export default function Layout() {
       <header className="app-header">
         <div className="container app-header-inner">
           <Link to="/projects" className="app-brand">
-            AI Home Layout
+            Layout Builder
           </Link>
           {user && (
             <div className="app-header-user">
