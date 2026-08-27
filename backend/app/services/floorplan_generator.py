@@ -374,6 +374,53 @@ def _cell_width_estimate(cells, axis_of, row: int, col: int) -> float:
     return max(rm.min_w for rm in occupants) if axis == "y" else sum(rm.min_w for rm in occupants)
 
 
+def _target_aspect(occupants: list[RoomInstance]) -> float:
+    """Desired length:width ratio to aim for when a shared dimension is being
+    divided among sibling groups: a lone room's own min_l/min_w, or a neutral
+    1.0 (aim square) once there's more than one occupant — multiple occupants
+    get their actual proportions sorted out by the width-wise column split
+    that follows, so the group itself only needs to end up roughly square."""
+    if len(occupants) == 1 and occupants[0].min_w > 0:
+        return occupants[0].min_l / occupants[0].min_w
+    return 1.0
+
+
+def _squarify_blend(occupant_count: int) -> float:
+    """How strongly to bias a shared dimension's split toward each group's
+    aspect-ratio target instead of pure weight share. A lone occupant that
+    must span the same full width as its (possibly much heavier) siblings
+    needs the strongest correction — pure weight share would starve it down
+    to a sliver of height, however wide it ends up. Multi-occupant groups
+    already get to fix their own shape via the width-wise split that
+    follows, so they need less (but still some) nudging."""
+    return {1: 0.75, 2: 0.55}.get(occupant_count, 0.35)
+
+
+def _squarified_shares(
+    weights: list[float], aspects: list[float], occupant_counts: list[int], total_area: float
+) -> list[float]:
+    """Weight-like shares for `subdivide_min_aware`'s shared dimension,
+    biased toward each item's own roughly-`aspect` (length:width) shape
+    rather than pure weight share. Pure weight share starves a
+    lightly-weighted item that must span the same full width as its
+    siblings into a thin sliver: it gets only a tiny fraction of the shared
+    height to go with that full width, regardless of what shape it actually
+    needs. This trades away *exact* weight-proportional area — some area
+    shifts between siblings — for saner shapes; `subdivide_min_aware`
+    re-normalizes whatever is returned here by its own sum, and its `min`
+    floor still applies on top, so total space used and minimum-size
+    guarantees are unaffected either way."""
+    total_weight = sum(weights) or 1.0
+    total_area = max(total_area, 1e-6)
+    ideal = [math.sqrt(max(total_area * (w / total_weight) * a, 1e-6)) for w, a in zip(weights, aspects)]
+    ideal_total = sum(ideal) or 1.0
+    blends = [_squarify_blend(n) for n in occupant_counts]
+    return [
+        blends[i] * (ideal[i] / ideal_total) + (1 - blends[i]) * (weights[i] / total_weight)
+        for i in range(len(weights))
+    ]
+
+
 def _layout_grid(buildable: dict, cells: dict[tuple[int, int], list[RoomInstance]]) -> None:
     """Hierarchical (guillotine-style) slice: rows are sized by their total room
     weight, then each row is independently sliced into only the columns that
@@ -387,7 +434,13 @@ def _layout_grid(buildable: dict, cells: dict[tuple[int, int], list[RoomInstance
     axis choice to compute a real minimum-size floor per row/column, so rooms
     only get squeezed below their `min_w`/`min_l` when the buildable rect
     genuinely doesn't have enough space for the whole program — not because a
-    plain weight split happened to shortchange them."""
+    plain weight split happened to shortchange them.
+
+    Row heights (and, within a 3-column row, its two sub-row depths) are then
+    picked with `_squarified_shares` rather than pure weight share, so a
+    lightly-weighted room that ends up alone in a row doesn't get stretched
+    into a wide, shallow sliver just because it must span the same width as
+    everything else on the floor."""
     row_weight = [sum(sum(rm.weight for rm in cells[(row, col)]) for col in range(3)) for row in range(3)]
     total = sum(row_weight) or 1.0
     min_share = 0.02
@@ -441,7 +494,14 @@ def _layout_grid(buildable: dict, cells: dict[tuple[int, int], list[RoomInstance
         depth_b = max((_cell_depth_estimate(cells, axis_of, row, c) for c in group_b), default=0.0)
         row_min.append(depth_a + depth_b)
 
-    row_items = [{"weight": row_weight[row], "min": row_min[row]} for row in range(3)]
+    row_occupants = [[rm for col in range(3) for rm in cells[(row, col)]] for row in range(3)]
+    row_shares = _squarified_shares(
+        row_weight,
+        [_target_aspect(row_occupants[row]) for row in range(3)],
+        [len(row_occupants[row]) for row in range(3)],
+        geo.rect_area(buildable),
+    )
+    row_items = [{"weight": row_shares[row], "min": row_min[row]} for row in range(3)]
     row_rects = geo.subdivide_min_aware(buildable, "y", row_items)
 
     for row in range(3):
@@ -454,12 +514,20 @@ def _layout_grid(buildable: dict, cells: dict[tuple[int, int], list[RoomInstance
         else:
             depth_a = max(_cell_depth_estimate(cells, axis_of, row, c) for c in group_a)
             depth_b = max(_cell_depth_estimate(cells, axis_of, row, c) for c in group_b)
-            weight_a = sum(rm.weight for c in group_a for rm in cells[(row, c)]) or 0.1
-            weight_b = sum(rm.weight for c in group_b for rm in cells[(row, c)]) or 0.1
+            group_a_occupants = [rm for c in group_a for rm in cells[(row, c)]]
+            group_b_occupants = [rm for c in group_b for rm in cells[(row, c)]]
+            weight_a = sum(rm.weight for rm in group_a_occupants) or 0.1
+            weight_b = sum(rm.weight for rm in group_b_occupants) or 0.1
+            shares = _squarified_shares(
+                [weight_a, weight_b],
+                [_target_aspect(group_a_occupants), _target_aspect(group_b_occupants)],
+                [len(group_a_occupants), len(group_b_occupants)],
+                geo.rect_area(row_rect),
+            )
             sub_rows = geo.subdivide_min_aware(
                 row_rect,
                 "y",
-                [{"weight": weight_a, "min": depth_a}, {"weight": weight_b, "min": depth_b}],
+                [{"weight": shares[0], "min": depth_a}, {"weight": shares[1], "min": depth_b}],
             )
             _slice_columns(sub_rows[0], group_a, cells, row, axis_of)
             _slice_columns(sub_rows[1], group_b, cells, row, axis_of)
