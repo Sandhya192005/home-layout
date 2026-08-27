@@ -10,6 +10,7 @@ export default function ProjectsPage() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [creating, setCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   function load() {
     api
@@ -19,6 +20,20 @@ export default function ProjectsPage() {
   }
 
   useEffect(load, []);
+
+  async function handleDelete(p: Project) {
+    if (!window.confirm(`Delete "${p.name}"? This cannot be undone.`)) return;
+    setDeletingId(p.id);
+    setError(null);
+    try {
+      await api.deleteProject(p.id);
+      setProjects((prev) => prev?.filter((x) => x.id !== p.id) ?? prev);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not delete project");
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   async function handleCreate(e: FormEvent) {
     e.preventDefault();
@@ -84,6 +99,14 @@ export default function ProjectsPage() {
                 </div>
                 <span className={`status-chip status-${p.status}`}>{p.status}</span>
               </Link>
+              <button
+                type="button"
+                className="btn btn-danger project-item-delete"
+                disabled={deletingId === p.id}
+                onClick={() => handleDelete(p)}
+              >
+                {deletingId === p.id ? "Deleting…" : "Delete"}
+              </button>
             </li>
           ))}
         </ul>
