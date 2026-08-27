@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-import { api, getToken, setToken } from "../api/client";
+import { api, getRefreshToken, getToken, setTokens } from "../api/client";
 import type { User } from "../api/types";
 
 interface AuthContextValue {
@@ -25,13 +25,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     api
       .me()
       .then(setUser)
-      .catch(() => setToken(null))
+      .catch(() => setTokens(null, null))
       .finally(() => setLoading(false));
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
-    const { access_token } = await api.login(email, password);
-    setToken(access_token);
+    const { access_token, refresh_token } = await api.login(email, password);
+    setTokens(access_token, refresh_token);
     const me = await api.me();
     setUser(me);
   }, []);
@@ -42,8 +42,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [login]);
 
   const logout = useCallback(() => {
-    setToken(null);
+    const refreshToken = getRefreshToken();
+    setTokens(null, null);
     setUser(null);
+    if (refreshToken) api.logout(refreshToken).catch(() => {}); // best-effort server-side revocation
   }, []);
 
   return (

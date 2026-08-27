@@ -12,6 +12,7 @@ import type {
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL as string;
 const TOKEN_KEY = "ahl_token";
+const REFRESH_KEY = "ahl_refresh_token";
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -20,6 +21,16 @@ export function getToken(): string | null {
 export function setToken(token: string | null) {
   if (token) localStorage.setItem(TOKEN_KEY, token);
   else localStorage.removeItem(TOKEN_KEY);
+}
+
+export function getRefreshToken(): string | null {
+  return localStorage.getItem(REFRESH_KEY);
+}
+
+export function setTokens(accessToken: string | null, refreshToken: string | null) {
+  setToken(accessToken);
+  if (refreshToken) localStorage.setItem(REFRESH_KEY, refreshToken);
+  else localStorage.removeItem(REFRESH_KEY);
 }
 
 export class ApiError extends Error {
@@ -55,6 +66,49 @@ function extractMessage(detail: unknown): string {
   return "Request failed";
 }
 
+let refreshInFlight: Promise<boolean> | null = null;
+
+// Dedupes concurrent 401s into a single /auth/refresh call; returns whether
+// the session was successfully refreshed.
+async function refreshAccessToken(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = (async () => {
+      const refreshToken = getRefreshToken();
+      if (!refreshToken) return false;
+      try {
+        const res = await fetch(`${BASE_URL}/auth/refresh`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        });
+        if (!res.ok) {
+          setTokens(null, null);
+          return false;
+        }
+        const data = (await res.json()) as { access_token: string; refresh_token: string };
+        setTokens(data.access_token, data.refresh_token);
+        return true;
+      } catch {
+        return false;
+      }
+    })().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+async function doFetch(path: string, method: string, headers: Record<string, string>, body: unknown) {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const isJson = res.headers.get("content-type")?.includes("application/json");
+  const data = res.status === 204 ? undefined : isJson ? await res.json() : await res.text();
+  return { res, data };
+}
+
 async function request<T>(
   path: string,
   options: { method?: string; body?: unknown; auth?: boolean } = {}
@@ -67,16 +121,18 @@ async function request<T>(
     if (token) headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const res = await fetch(`${BASE_URL}${path}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  let { res, data } = await doFetch(path, method, headers, body);
 
-  if (res.status === 204) return undefined as T;
-
-  const isJson = res.headers.get("content-type")?.includes("application/json");
-  const data = isJson ? await res.json() : await res.text();
+  // A stale/expired access token: try one silent refresh-and-retry before
+  // surfacing the 401 (skip for the auth endpoints themselves to avoid loops).
+  if (res.status === 401 && auth && !path.startsWith("/auth/")) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      const token = getToken();
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      ({ res, data } = await doFetch(path, method, headers, body));
+    }
+  }
 
   if (!res.ok) {
     throw new ApiError(res.status, data);
@@ -101,10 +157,13 @@ export const api = {
     request<User>("/auth/register", { method: "POST", body: input, auth: false }),
 
   login: (email: string, password: string) =>
-    requestForm<{ access_token: string; token_type: string }>("/auth/login", {
+    requestForm<{ access_token: string; refresh_token: string; token_type: string }>("/auth/login", {
       username: email,
       password,
     }),
+
+  logout: (refreshToken: string) =>
+    request<void>("/auth/logout", { method: "POST", body: { refresh_token: refreshToken }, auth: false }),
 
   me: () => request<User>("/auth/me"),
 

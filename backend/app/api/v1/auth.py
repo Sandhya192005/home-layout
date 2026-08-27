@@ -5,11 +5,18 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.security import create_access_token, verify_password
+from app.crud import refresh_token as refresh_token_crud
 from app.crud.user import create_user, get_user_by_email
 from app.models.user import User
-from app.schemas.user import Token, UserCreate, UserRead
+from app.schemas.user import RefreshRequest, Token, UserCreate, UserRead
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _issue_token_pair(db: Session, user: User) -> Token:
+    access_token = create_access_token(subject=user.email)
+    refresh_token, _ = refresh_token_crud.create_refresh_token(db, user.id)
+    return Token(access_token=access_token, refresh_token=refresh_token)
 
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
@@ -28,8 +35,28 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    token = create_access_token(subject=user.email)
-    return Token(access_token=token)
+    return _issue_token_pair(db, user)
+
+
+@router.post("/refresh", response_model=Token)
+def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
+    invalid = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired refresh token")
+    row = refresh_token_crud.get_valid_refresh_token(db, payload.refresh_token)
+    if not row:
+        raise invalid
+    user = db.get(User, row.user_id)
+    if not user or not user.is_active:
+        raise invalid
+    # rotate: the old refresh token is single-use, a new one is issued alongside the new access token
+    refresh_token_crud.revoke_refresh_token(db, row)
+    return _issue_token_pair(db, user)
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(payload: RefreshRequest, db: Session = Depends(get_db)):
+    row = refresh_token_crud.get_valid_refresh_token(db, payload.refresh_token)
+    if row:
+        refresh_token_crud.revoke_refresh_token(db, row)
 
 
 @router.get("/me", response_model=UserRead)
