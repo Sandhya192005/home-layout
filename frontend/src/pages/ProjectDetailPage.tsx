@@ -75,6 +75,10 @@ export default function ProjectDetailPage() {
   const [shareBusy, setShareBusy] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
 
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareLeftId, setCompareLeftId] = useState<number | null>(null);
+  const [compareRightId, setCompareRightId] = useState<number | null>(null);
+
   useEffect(() => {
     api.getProject(pid).then(setProject).catch(() => setError("Could not load project"));
     api
@@ -157,6 +161,27 @@ export default function ProjectDetailPage() {
     } catch {
       setError("Could not load that version");
     }
+  }
+
+  function toggleCompareMode() {
+    setCompareMode((on) => {
+      if (!on && floorPlanVersions.length >= 2) {
+        // floorPlanVersions is newest-first -- default to comparing the two most recent versions
+        setCompareLeftId((prev) => prev ?? floorPlanVersions[1].id);
+        setCompareRightId((prev) => prev ?? floorPlanVersions[0].id);
+      }
+      return !on;
+    });
+  }
+
+  function roomCount(plan: FloorPlan): number {
+    return plan.plan_data.floors.reduce((sum, f) => sum + f.rooms.length, 0);
+  }
+
+  function formatDiff(delta: number, digits = 0): string {
+    const rounded = Number(delta.toFixed(digits));
+    if (rounded === 0) return "no change";
+    return rounded > 0 ? `+${rounded.toLocaleString()}` : rounded.toLocaleString();
   }
 
   function handleDeleteVersionClick(floorPlanId: number) {
@@ -537,6 +562,74 @@ export default function ProjectDetailPage() {
                   </button>
                 </span>
               ))}
+              <button type="button" className="btn btn-secondary version-compare-toggle" onClick={toggleCompareMode}>
+                {compareMode ? "Close compare" : "Compare versions"}
+              </button>
+            </div>
+          )}
+
+          {compareMode && floorPlanVersions.length > 1 && (
+            <div className="compare-panel card">
+              <div className="compare-picker-row">
+                <label>
+                  <span className="muted">Compare</span>
+                  <select value={compareLeftId ?? ""} onChange={(e) => setCompareLeftId(Number(e.target.value))}>
+                    {floorPlanVersions.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        v{v.version} &middot; {Math.round(v.total_built_up_area).toLocaleString()} sq ft
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span className="muted">with</span>
+                  <select value={compareRightId ?? ""} onChange={(e) => setCompareRightId(Number(e.target.value))}>
+                    {floorPlanVersions.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        v{v.version} &middot; {Math.round(v.total_built_up_area).toLocaleString()} sq ft
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              {(() => {
+                const left = floorPlanVersions.find((v) => v.id === compareLeftId);
+                const right = floorPlanVersions.find((v) => v.id === compareRightId);
+                if (!left || !right) return <p className="muted">Pick two versions to compare.</p>;
+                return (
+                  <>
+                    <div className="compare-diff-row">
+                      <div>
+                        <span className="muted">Built-up area</span>{" "}
+                        <strong className="mono">{formatDiff(right.total_built_up_area - left.total_built_up_area)} sq ft</strong>
+                      </div>
+                      <div>
+                        <span className="muted">Estimated cost</span>{" "}
+                        <strong className="mono">₹{formatDiff(right.estimated_cost - left.estimated_cost)}</strong>
+                      </div>
+                      <div>
+                        <span className="muted">Rooms</span>{" "}
+                        <strong className="mono">{formatDiff(roomCount(right) - roomCount(left))}</strong>
+                      </div>
+                      <div>
+                        <span className="muted">Floors</span>{" "}
+                        <strong className="mono">{formatDiff(right.plan_data.floors.length - left.plan_data.floors.length)}</strong>
+                      </div>
+                    </div>
+                    <div className="compare-grid">
+                      <div>
+                        <div className="compare-col-label">v{left.version}</div>
+                        <FloorPlanViewer plan={left.plan_data} />
+                      </div>
+                      <div>
+                        <div className="compare-col-label">v{right.version}</div>
+                        <FloorPlanViewer plan={right.plan_data} />
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           )}
 

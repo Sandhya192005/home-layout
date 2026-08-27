@@ -148,6 +148,60 @@
   padding: 0.3rem 0.5rem;
 }
 
+.version-compare-toggle {
+  margin-left: auto;
+  font-size: 0.78rem;
+  padding: 0.3rem 0.7rem;
+}
+
+.compare-panel {
+  padding: 0.9rem 1.25rem 1.1rem;
+}
+.compare-picker-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  margin-bottom: 0.8rem;
+}
+.compare-picker-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+}
+.compare-picker-row select {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--surface-line);
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+.compare-diff-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  padding: 0.6rem 0;
+  margin-bottom: 0.8rem;
+  border-top: 1px solid var(--surface-line);
+  border-bottom: 1px solid var(--surface-line);
+  font-size: 0.85rem;
+}
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 1.25rem;
+  overflow-x: auto;
+}
+.compare-col-label {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+
 .share-row {
   display: flex;
   flex-wrap: wrap;
