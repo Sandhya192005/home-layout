@@ -26,7 +26,7 @@ def get_latest_requirement(db: Session, project_id: int) -> Requirement | None:
     return (
         db.query(Requirement)
         .filter(Requirement.project_id == project_id, Requirement.deleted_at.is_(None))
-        .order_by(Requirement.created_at.desc())
+        .order_by(Requirement.created_at.desc(), Requirement.id.desc())
         .first()
     )
 
@@ -35,6 +35,6 @@ def list_requirements(db: Session, project_id: int) -> list[Requirement]:
     return (
         db.query(Requirement)
         .filter(Requirement.project_id == project_id, Requirement.deleted_at.is_(None))
-        .order_by(Requirement.created_at.desc())
+        .order_by(Requirement.created_at.desc(), Requirement.id.desc())
         .all()
     )
