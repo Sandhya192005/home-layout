@@ -7,6 +7,7 @@ import type {
   PublicFloorPlan,
   Requirement,
   RequirementInput,
+  RoomLayoutUpdateInput,
   User,
 } from "./types";
 
@@ -212,4 +213,8 @@ export const api = {
   // --- furniture editor ---
   updateFurniture: (projectId: number, floorPlanId: number, input: FurnitureLayoutUpdateInput) =>
     request<FloorPlan>(`/projects/${projectId}/floorplans/${floorPlanId}/furniture`, { method: "PUT", body: input }),
+
+  // --- room layout editor ---
+  updateRoomLayout: (projectId: number, floorPlanId: number, input: RoomLayoutUpdateInput) =>
+    request<FloorPlan>(`/projects/${projectId}/floorplans/${floorPlanId}/rooms`, { method: "PUT", body: input }),
 };

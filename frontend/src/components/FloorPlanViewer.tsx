@@ -34,6 +34,21 @@ function furnitureLabel(type: string): string {
   return FURNITURE_CATALOG.find((f) => f.type === type)?.label ?? type.replace(/_/g, " ");
 }
 
+interface RoomRect {
+  x: number;
+  y: number;
+  width: number;
+  length: number;
+}
+
+interface RoomDragState {
+  roomId: string;
+  mode: "move" | "resize";
+  startX: number;
+  startY: number;
+  orig: RoomRect;
+}
+
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Transform for one furniture icon: the icon is authored in a 0..1 unit
@@ -443,17 +458,21 @@ function sanitizeFileName(label: string): string {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "floor-plan";
 }
 
-/** Wraps a JPEG image in a minimal, dependency-free single-page PDF (one
- * Image XObject painted to fill the page). Avoids pulling in a PDF library
- * for what is otherwise a one-image document. Byte offsets in the xref table
- * must exactly match object start positions, hence the manual bookkeeping. */
-function buildMinimalPdf(
-  jpegBytes: Uint8Array,
-  imgWidthPx: number,
-  imgHeightPx: number,
-  pageWidthPt: number,
-  pageHeightPt: number
-): Uint8Array {
+interface PdfPageImage {
+  jpegBytes: Uint8Array;
+  imgWidthPx: number;
+  imgHeightPx: number;
+  pageWidthPt: number;
+  pageHeightPt: number;
+}
+
+/** Wraps one JPEG image per page in a minimal, dependency-free multi-page PDF
+ * (each page paints a single Image XObject to fill itself). Avoids pulling in
+ * a PDF library for what is otherwise a handful of full-page images -- one
+ * per floor. Byte offsets in the xref table must exactly match object start
+ * positions, hence the manual bookkeeping. Object numbering: 1 = Catalog,
+ * 2 = Pages tree, then 3 objects per page (Page, Image XObject, Contents). */
+function buildMinimalPdf(pages: PdfPageImage[]): Uint8Array {
   const enc = new TextEncoder();
   const chunks: Uint8Array[] = [];
   const offsets: number[] = [0];
@@ -469,38 +488,47 @@ function buildMinimalPdf(
 
   pushText("%PDF-1.4\n");
 
+  const totalObjects = 2 + pages.length * 3;
+
   offsets[1] = pos;
   pushText("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
 
+  const kids = pages.map((_, i) => `${3 + i * 3} 0 R`).join(" ");
   offsets[2] = pos;
-  pushText("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+  pushText(`2 0 obj\n<< /Type /Pages /Kids [${kids}] /Count ${pages.length} >>\nendobj\n`);
 
-  offsets[3] = pos;
-  pushText(
-    `3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidthPt} ${pageHeightPt}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n`
-  );
+  pages.forEach((page, i) => {
+    const pageObjNum = 3 + i * 3;
+    const imgObjNum = pageObjNum + 1;
+    const contentObjNum = pageObjNum + 2;
 
-  offsets[4] = pos;
-  pushText(
-    `4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${imgWidthPx} /Height ${imgHeightPx} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`
-  );
-  push(jpegBytes);
-  pushText("\nendstream\nendobj\n");
+    offsets[pageObjNum] = pos;
+    pushText(
+      `${pageObjNum} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${page.pageWidthPt} ${page.pageHeightPt}] /Resources << /XObject << /Im0 ${imgObjNum} 0 R >> >> /Contents ${contentObjNum} 0 R >>\nendobj\n`
+    );
 
-  const content = `q ${pageWidthPt} 0 0 ${pageHeightPt} 0 0 cm /Im0 Do Q`;
-  const contentBytes = enc.encode(content);
-  offsets[5] = pos;
-  pushText(`5 0 obj\n<< /Length ${contentBytes.length} >>\nstream\n`);
-  push(contentBytes);
-  pushText("\nendstream\nendobj\n");
+    offsets[imgObjNum] = pos;
+    pushText(
+      `${imgObjNum} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${page.imgWidthPx} /Height ${page.imgHeightPx} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${page.jpegBytes.length} >>\nstream\n`
+    );
+    push(page.jpegBytes);
+    pushText("\nendstream\nendobj\n");
+
+    const content = `q ${page.pageWidthPt} 0 0 ${page.pageHeightPt} 0 0 cm /Im0 Do Q`;
+    const contentBytes = enc.encode(content);
+    offsets[contentObjNum] = pos;
+    pushText(`${contentObjNum} 0 obj\n<< /Length ${contentBytes.length} >>\nstream\n`);
+    push(contentBytes);
+    pushText("\nendstream\nendobj\n");
+  });
 
   const xrefOffset = pos;
-  let xref = `xref\n0 6\n0000000000 65535 f \n`;
-  for (let i = 1; i <= 5; i++) {
+  let xref = `xref\n0 ${totalObjects + 1}\n0000000000 65535 f \n`;
+  for (let i = 1; i <= totalObjects; i++) {
     xref += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
   }
   pushText(xref);
-  pushText(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`);
+  pushText(`trailer\n<< /Size ${totalObjects + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`);
 
   const total = new Uint8Array(pos);
   let o = 0;
@@ -545,6 +573,12 @@ export default function FloorPlanViewer({
   const [savingFurniture, setSavingFurniture] = useState(false);
   const [furnitureError, setFurnitureError] = useState<string | null>(null);
   const dragOffsetRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
+
+  const [editingRoomsFloorIdx, setEditingRoomsFloorIdx] = useState<number | null>(null);
+  const [localRooms, setLocalRooms] = useState<Record<string, RoomRect>>({});
+  const [roomDrag, setRoomDrag] = useState<RoomDragState | null>(null);
+  const [savingRooms, setSavingRooms] = useState(false);
+  const [roomEditError, setRoomEditError] = useState<string | null>(null);
 
   const floor = plan.floors[activeFloorIdx];
   const isEditingThisFloor = editingFloorIdx === activeFloorIdx;
@@ -713,49 +747,177 @@ export default function FloorPlanViewer({
     }
   }
 
-  function renderToCanvas(): Promise<HTMLCanvasElement> {
-    const svgEl = svgRef.current;
-    if (!svgEl) return Promise.reject(new Error("no svg"));
+  const isEditingRoomsThisFloor = editingRoomsFloorIdx === activeFloorIdx;
+  const MIN_ROOM_SIZE = 3;
 
-    const clone = svgEl.cloneNode(true) as SVGSVGElement;
-    clone.removeAttribute("class");
-    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  function startEditRooms() {
+    const init: Record<string, RoomRect> = {};
+    for (const r of floor.rooms) {
+      if (r.type !== "staircase") init[r.id] = { x: r.x, y: r.y, width: r.width, length: r.length };
+    }
+    setLocalRooms(init);
+    setEditingRoomsFloorIdx(activeFloorIdx);
+    setRoomEditError(null);
+  }
+
+  function cancelEditRooms() {
+    setEditingRoomsFloorIdx(null);
+    setLocalRooms({});
+    setRoomDrag(null);
+    setRoomEditError(null);
+  }
+
+  function startRoomDrag(e: React.MouseEvent, roomId: string, mode: "move" | "resize") {
+    e.stopPropagation();
+    e.preventDefault();
+    const rect = localRooms[roomId];
+    if (!rect) return;
+    const p = screenToSvgPoint(e.clientX, e.clientY);
+    setRoomDrag({ roomId, mode, startX: p.x, startY: p.y, orig: rect });
+  }
+
+  useEffect(() => {
+    if (!roomDrag) return;
+    const outline = floor.outline;
+
+    function handleMove(e: MouseEvent) {
+      const drag = roomDrag!;
+      const p = screenToSvgPoint(e.clientX, e.clientY);
+      const dx = p.x - drag.startX;
+      const dy = p.y - drag.startY;
+      const orig = drag.orig;
+
+      let next: RoomRect;
+      if (drag.mode === "move") {
+        const maxX = outline.x + outline.width - orig.width;
+        const maxY = outline.y + outline.length - orig.length;
+        next = {
+          x: Math.min(Math.max(orig.x + dx, outline.x), Math.max(maxX, outline.x)),
+          y: Math.min(Math.max(orig.y + dy, outline.y), Math.max(maxY, outline.y)),
+          width: orig.width,
+          length: orig.length,
+        };
+      } else {
+        const maxWidth = outline.x + outline.width - orig.x;
+        const maxLength = outline.y + outline.length - orig.y;
+        next = {
+          x: orig.x,
+          y: orig.y,
+          width: Math.min(Math.max(orig.width + dx, MIN_ROOM_SIZE), maxWidth),
+          length: Math.min(Math.max(orig.length + dy, MIN_ROOM_SIZE), maxLength),
+        };
+      }
+
+      setLocalRooms((prev) => ({
+        ...prev,
+        [drag.roomId]: { x: round2(next.x), y: round2(next.y), width: round2(next.width), length: round2(next.length) },
+      }));
+    }
+    function handleUp() {
+      setRoomDrag(null);
+    }
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomDrag, floor]);
+
+  async function saveRoomLayout() {
+    if (!editable || editingRoomsFloorIdx === null || savingRooms) return;
+    const changed: Record<string, RoomRect> = {};
+    for (const r of floor.rooms) {
+      const local = localRooms[r.id];
+      if (!local) continue;
+      if (local.x !== r.x || local.y !== r.y || local.width !== r.width || local.length !== r.length) {
+        changed[r.id] = local;
+      }
+    }
+    if (Object.keys(changed).length === 0) {
+      cancelEditRooms();
+      return;
+    }
+    setSavingRooms(true);
+    setRoomEditError(null);
+    try {
+      const updated = await api.updateRoomLayout(projectId!, floorPlanId!, {
+        floor_number: floor.floor_number,
+        rooms: changed,
+      });
+      onFurnitureSaved?.(updated.plan_data);
+      setEditingRoomsFloorIdx(null);
+      setLocalRooms({});
+    } catch (err) {
+      setRoomEditError(err instanceof ApiError ? err.message : "Could not save room layout");
+    } finally {
+      setSavingRooms(false);
+    }
+  }
+
+  /** Builds a standalone, self-styled SVG document string for any floor (not
+   * just the currently displayed one) straight from buildFloorSvg's output,
+   * so every floor can be rasterized for export without having to switch
+   * React state and wait for a re-render per floor. Assembled via a detached
+   * DOM node + XMLSerializer (the same route the live view's own markup goes
+   * through via dangerouslySetInnerHTML) rather than raw string
+   * concatenation, since buildFloorSvg's fragments are HTML-parser-lenient
+   * markup, not necessarily strict XML -- feeding them to an <img> as
+   * image/svg+xml requires well-formed XML, which only the DOM round-trip
+   * guarantees. */
+  function floorSvgMarkup(floorIdx: number): { markup: string; width: number; height: number } {
+    const floorData = plan.floors[floorIdx];
+    const { svg: innerSvg, viewBox: vb } = buildFloorSvg(
+      floorData, plan.meta.plot_length, plan.meta.plot_width, wallStyle, gateStyle, null
+    );
+
+    const svgNs = "http://www.w3.org/2000/svg";
+    const svgEl = document.createElementNS(svgNs, "svg");
+    svgEl.setAttribute("xmlns", svgNs);
+    svgEl.setAttribute("viewBox", vb);
+    const g = document.createElementNS(svgNs, "g");
+    g.innerHTML = innerSvg;
+    svgEl.appendChild(g);
+
+    const [, , vbWidth, vbHeight] = vb.split(/\s+/).map(Number);
+    const targetWidth = 2200;
+    const targetHeight = Math.round((vbHeight / vbWidth) * targetWidth);
+    svgEl.setAttribute("width", String(targetWidth));
+    svgEl.setAttribute("height", String(targetHeight));
 
     // The markup fills/strokes reference the page's CSS custom properties
     // (var(--room-social) etc.) -- once serialized and rendered as a
     // standalone image those variables have no :root to resolve against, so
     // inline their current computed values as an embedded stylesheet first.
-    const varNames = Array.from(new Set(Array.from(clone.outerHTML.matchAll(/var\((--[a-z0-9-]+)\)/gi)).map((m) => m[1])));
+    const varNames = Array.from(new Set(Array.from(innerSvg.matchAll(/var\((--[a-z0-9-]+)\)/gi)).map((m) => m[1])));
     const rootStyles = getComputedStyle(document.documentElement);
     const varDecls = varNames.map((name) => `${name}: ${rootStyles.getPropertyValue(name).trim()};`).join(" ");
-    const styleEl = document.createElementNS("http://www.w3.org/2000/svg", "style");
+    const styleEl = document.createElementNS(svgNs, "style");
     styleEl.textContent = `:root { ${varDecls} }`;
-    clone.insertBefore(styleEl, clone.firstChild);
+    svgEl.insertBefore(styleEl, svgEl.firstChild);
 
-    const vb = clone.viewBox.baseVal;
-    const targetWidth = 2200;
-    const targetHeight = Math.round((vb.height / vb.width) * targetWidth);
-    clone.setAttribute("width", String(targetWidth));
-    clone.setAttribute("height", String(targetHeight));
+    const markup = new XMLSerializer().serializeToString(svgEl);
+    return { markup, width: targetWidth, height: targetHeight };
+  }
 
-    const svgString = new XMLSerializer().serializeToString(clone);
-    const svgUrl = URL.createObjectURL(new Blob([svgString], { type: "image/svg+xml;charset=utf-8" }));
-
+  function rasterizeSvgMarkup(markup: string, width: number, height: number): Promise<HTMLCanvasElement> {
+    const svgUrl = URL.createObjectURL(new Blob([markup], { type: "image/svg+xml;charset=utf-8" }));
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => {
         URL.revokeObjectURL(svgUrl);
         const canvas = document.createElement("canvas");
-        canvas.width = targetWidth;
-        canvas.height = targetHeight;
+        canvas.width = width;
+        canvas.height = height;
         const ctx = canvas.getContext("2d");
         if (!ctx) {
           reject(new Error("no canvas context"));
           return;
         }
         ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, targetWidth, targetHeight);
-        ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
         resolve(canvas);
       };
       img.onerror = () => {
@@ -764,6 +926,11 @@ export default function FloorPlanViewer({
       };
       img.src = svgUrl;
     });
+  }
+
+  function renderToCanvas(floorIdx: number = activeFloorIdx): Promise<HTMLCanvasElement> {
+    const { markup, width, height } = floorSvgMarkup(floorIdx);
+    return rasterizeSvgMarkup(markup, width, height);
   }
 
   async function handleDownloadPng() {
@@ -787,17 +954,25 @@ export default function FloorPlanViewer({
     if (downloading) return;
     setDownloading("pdf");
     try {
-      const canvas = await renderToCanvas();
-      const jpegDataUrl = canvas.toDataURL("image/jpeg", 0.92);
-      const jpegBytes = dataUrlToBytes(jpegDataUrl);
-      // 200 DPI: physical page size in points (1/72in) derived from pixel size.
-      const pageWidthPt = (canvas.width * 72) / 200;
-      const pageHeightPt = (canvas.height * 72) / 200;
-      const pdfBytes = buildMinimalPdf(jpegBytes, canvas.width, canvas.height, pageWidthPt, pageHeightPt);
+      const pages: PdfPageImage[] = [];
+      for (let i = 0; i < plan.floors.length; i++) {
+        const canvas = await renderToCanvas(i);
+        const jpegDataUrl = canvas.toDataURL("image/jpeg", 0.92);
+        // 200 DPI: physical page size in points (1/72in) derived from pixel size.
+        pages.push({
+          jpegBytes: dataUrlToBytes(jpegDataUrl),
+          imgWidthPx: canvas.width,
+          imgHeightPx: canvas.height,
+          pageWidthPt: (canvas.width * 72) / 200,
+          pageHeightPt: (canvas.height * 72) / 200,
+        });
+      }
+      const pdfBytes = buildMinimalPdf(pages);
       const blob = new Blob([Uint8Array.from(pdfBytes)], { type: "application/pdf" });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = `${sanitizeFileName(floor.label)}-floor-plan.pdf`;
+      link.download =
+        plan.floors.length > 1 ? "floor-plan-all-floors.pdf" : `${sanitizeFileName(floor.label)}-floor-plan.pdf`;
       link.click();
       URL.revokeObjectURL(link.href);
     } finally {
@@ -840,9 +1015,13 @@ export default function FloorPlanViewer({
                 {downloading === "png" ? "Preparing…" : "Download PNG"}
               </button>
               <button type="button" className="btn btn-secondary drawing-panel-download" onClick={handleDownloadPdf} disabled={!!downloading}>
-                {downloading === "pdf" ? "Preparing…" : "Download PDF"}
+                {downloading === "pdf"
+                  ? "Preparing…"
+                  : plan.floors.length > 1
+                    ? `Download PDF (${plan.floors.length} floors)`
+                    : "Download PDF"}
               </button>
-              {editable && !isEditingThisFloor && (
+              {editable && !isEditingThisFloor && !isEditingRoomsThisFloor && (
                 <button type="button" className="btn btn-secondary drawing-panel-download" onClick={startEditFurniture}>
                   Edit furniture
                 </button>
@@ -853,6 +1032,21 @@ export default function FloorPlanViewer({
                     {savingFurniture ? "Saving…" : "Save layout"}
                   </button>
                   <button type="button" className="btn btn-secondary drawing-panel-download" onClick={cancelEditFurniture} disabled={savingFurniture}>
+                    Cancel
+                  </button>
+                </>
+              )}
+              {editable && !isEditingRoomsThisFloor && !isEditingThisFloor && (
+                <button type="button" className="btn btn-secondary drawing-panel-download" onClick={startEditRooms}>
+                  Edit rooms
+                </button>
+              )}
+              {editable && isEditingRoomsThisFloor && (
+                <>
+                  <button type="button" className="btn btn-primary drawing-panel-download" onClick={saveRoomLayout} disabled={savingRooms}>
+                    {savingRooms ? "Saving…" : "Save room layout"}
+                  </button>
+                  <button type="button" className="btn btn-secondary drawing-panel-download" onClick={cancelEditRooms} disabled={savingRooms}>
                     Cancel
                   </button>
                 </>
@@ -884,6 +1078,36 @@ export default function FloorPlanViewer({
                       <g dangerouslySetInnerHTML={{ __html: furnitureIconMarkup(item.type) }} />
                     </g>
                   ))}
+                </g>
+              )}
+              {isEditingRoomsThisFloor && (
+                <g>
+                  {Object.entries(localRooms).map(([roomId, rect]) => {
+                    const handleSize = Math.min(rect.width, rect.length) * 0.18 || 1;
+                    return (
+                      <g key={roomId} className={roomDrag?.roomId === roomId ? "room-editable is-dragging" : "room-editable"}>
+                        <rect
+                          x={rect.x}
+                          y={rect.y}
+                          width={rect.width}
+                          height={rect.length}
+                          className="room-edit-rect"
+                          onMouseDown={(e) => startRoomDrag(e, roomId, "move")}
+                        />
+                        <text x={rect.x + rect.width / 2} y={rect.y + rect.length / 2} className="room-edit-label">
+                          {fmt(rect.width)}&#8242; &times; {fmt(rect.length)}&#8242;
+                        </text>
+                        <rect
+                          x={rect.x + rect.width - handleSize}
+                          y={rect.y + rect.length - handleSize}
+                          width={handleSize}
+                          height={handleSize}
+                          className="room-edit-handle"
+                          onMouseDown={(e) => startRoomDrag(e, roomId, "resize")}
+                        />
+                      </g>
+                    );
+                  })}
                 </g>
               )}
             </svg>
@@ -1053,6 +1277,32 @@ export default function FloorPlanViewer({
                 <p className="muted furniture-hint">Drag items in the plan to reposition them.</p>
               </>
             )}
+          </div>
+        )}
+        {isEditingRoomsThisFloor && (
+          <div className="furniture-editor card">
+            <h2>Room layout</h2>
+            {roomEditError && <div className="error-banner">{roomEditError}</div>}
+            <p className="muted">
+              Drag a room to move it, or drag its bottom-right handle to resize. The staircase can't be moved (it
+              has to stay aligned across floors), and moving or resizing a room clears its furniture.
+            </p>
+            <ul className="furniture-list">
+              {floor.rooms
+                .filter((r) => r.type !== "staircase")
+                .map((r) => {
+                  const local = localRooms[r.id];
+                  if (!local) return null;
+                  return (
+                    <li key={r.id}>
+                      <span>{r.label}</span>
+                      <span>
+                        {fmt(local.width)}&#8242; &times; {fmt(local.length)}&#8242;
+                      </span>
+                    </li>
+                  );
+                })}
+            </ul>
           </div>
         )}
         </div>

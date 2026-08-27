@@ -1,6 +1,6 @@
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.mixins import AuditRead
 
@@ -17,6 +17,18 @@ class FurnitureItemUpdate(BaseModel):
 class FurnitureLayoutUpdate(BaseModel):
     floor_number: int
     furniture_by_room: dict[str, list[FurnitureItemUpdate]]
+
+
+class RoomRectUpdate(BaseModel):
+    x: float = Field(ge=0)
+    y: float = Field(ge=0)
+    width: float = Field(gt=0)
+    length: float = Field(gt=0)
+
+
+class RoomLayoutUpdate(BaseModel):
+    floor_number: int
+    rooms: dict[str, RoomRectUpdate]
 
 
 class FloorPlanRead(AuditRead):

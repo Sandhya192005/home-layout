@@ -169,11 +169,16 @@ def rect_intersect(a: dict, b: dict) -> dict:
     return {"x": x0, "y": y0, "w": max(x1 - x0, 0.0), "l": max(y1 - y0, 0.0)}
 
 
-def rects_overlap(a: dict, b: dict) -> bool:
-    """True if rects `a` and `b` overlap by more than a sliver (touching edges don't count)."""
+def rects_overlap(a: dict, b: dict, tolerance: float = EPS) -> bool:
+    """True if rects `a` and `b` overlap by more than `tolerance` (touching
+    edges don't count). The default EPS is exact-geometry precision; callers
+    validating hand-edited/rounded coordinates (e.g. a manual room resize
+    against 2-decimal-rounded stored rects) should pass a larger tolerance so
+    a sub-hundredth-of-a-foot rounding sliver from two independently rounded
+    "touching" edges isn't mistaken for a real overlap."""
     return (
-        a["x"] < rect_x2(b) - EPS and rect_x2(a) > b["x"] + EPS and
-        a["y"] < rect_y2(b) - EPS and rect_y2(a) > b["y"] + EPS
+        a["x"] < rect_x2(b) - tolerance and rect_x2(a) > b["x"] + tolerance and
+        a["y"] < rect_y2(b) - tolerance and rect_y2(a) > b["y"] + tolerance
     )
 
 

@@ -148,6 +148,18 @@ export interface MainGateData {
   side: "north" | "south" | "east" | "west";
 }
 
+export interface RoomRectUpdate {
+  x: number;
+  y: number;
+  width: number;
+  length: number;
+}
+
+export interface RoomLayoutUpdateInput {
+  floor_number: number;
+  rooms: Record<string, RoomRectUpdate>;
+}
+
 export interface FloorData {
   floor_number: number;
   label: string;

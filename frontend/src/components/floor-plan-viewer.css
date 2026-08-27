@@ -187,6 +187,37 @@
   filter: brightness(1.15) drop-shadow(0 0 4px var(--shadow));
 }
 
+.room-edit-rect {
+  fill: var(--accent);
+  fill-opacity: 0.12;
+  stroke: var(--accent);
+  stroke-width: 0.15;
+  stroke-dasharray: 0.6 0.4;
+  cursor: grab;
+}
+.room-editable:hover .room-edit-rect {
+  fill-opacity: 0.2;
+}
+.room-editable.is-dragging .room-edit-rect {
+  cursor: grabbing;
+  fill-opacity: 0.28;
+}
+.room-edit-label {
+  font-size: 1.6px;
+  font-family: var(--font-display);
+  text-anchor: middle;
+  dominant-baseline: middle;
+  fill: var(--ink);
+  pointer-events: none;
+  user-select: none;
+}
+.room-edit-handle {
+  fill: var(--accent);
+  stroke: var(--paper);
+  stroke-width: 0.1;
+  cursor: nwse-resize;
+}
+
 .furniture-editor {
   padding: 1rem 1rem 1.1rem;
 }

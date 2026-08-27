@@ -898,3 +898,68 @@ def generate_floor_plan(req: RequirementCreate) -> dict:
         "floors": floors_data,
     }
     return plan, round(total_built_up_area, 2)
+
+
+# ---------------------------------------------------------------------------
+# Manual room editing: re-derive walls/doors/windows/area for one floor after
+# a user hand-edits room rectangles (drag-to-move/resize in the frontend),
+# reusing the exact same derivation the initial generation pipeline uses so a
+# hand-edited layout keeps the same guarantees (real shared-wall doors, every
+# room reachable) as a freshly generated one.
+# ---------------------------------------------------------------------------
+
+def recompute_floor_geometry(floor: dict, facing: str) -> None:
+    """Mutates `floor` (one entry of plan_data["floors"]) in place: recomputes
+    each room's area/below_min_size from its current x/y/width/length, then
+    rebuilds windows, doors and walls from scratch. The floor's outline and
+    parking/ramp/main_gate are untouched -- only the room grid inside the
+    fixed exterior envelope is re-derived."""
+    outline = {"x": floor["outline"]["x"], "y": floor["outline"]["y"],
+               "w": floor["outline"]["width"], "l": floor["outline"]["length"]}
+
+    room_instances: list[RoomInstance] = []
+    for rd in floor["rooms"]:
+        rect = {"x": rd["x"], "y": rd["y"], "w": rd["width"], "l": rd["length"]}
+        meta = ROOM_LIBRARY[rd["type"]]
+        instance = RoomInstance(
+            room_id=rd["id"], room_type=rd["type"], label=rd["label"], weight=0, priority=0,
+            zones=[], habitable=meta["habitable"], min_w=meta["min_w"], min_l=meta["min_l"],
+            furniture=[], floor_index=0, zone=rd.get("zone"), rect=rect,
+        )
+        instance.below_min = rect["w"] < instance.min_w - 0.5 or rect["l"] < instance.min_l - 0.5
+        room_instances.append(instance)
+        rd["area"] = round(geo.rect_area(rect), 2)
+        rd["below_min_size"] = instance.below_min
+
+    existing_entrance_door = next((d for d in floor["doors"] if d["type"] == "main_entrance"), None)
+    entrance_id = existing_entrance_door["room_id"] if existing_entrance_door else None
+
+    room_dicts_for_walls = [{"id": ri.room_id, "rect": ri.rect} for ri in room_instances]
+
+    floor["windows"] = _build_windows(room_instances, outline)
+    floor["doors"] = _build_doors(room_instances, outline, facing, entrance_id)
+    floor["walls"] = _build_walls(outline, room_dicts_for_walls)
+
+
+def rooms_are_connected(room_ids: list[str], doors: list[dict]) -> bool:
+    """True if every room in `room_ids` is reachable from every other one via
+    the floor's internal doors (union-find over the door graph) -- the same
+    connectivity `_build_doors`'s spanning tree normally guarantees, checked
+    here after a manual edit since hand-moved rects might no longer share a
+    wall wide enough for a doorway."""
+    parent = {rid: rid for rid in room_ids}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for d in doors:
+        if d["type"] == "internal":
+            root_a, root_b = find(d["room_id"]), find(d["connects_to"])
+            if root_a != root_b:
+                parent[root_a] = root_b
+
+    roots = {find(rid) for rid in room_ids}
+    return len(roots) <= 1
