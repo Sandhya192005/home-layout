@@ -1,4 +1,5 @@
 import { Link, Outlet } from "react-router-dom";
+import ChatWidget from "./ChatWidget";
 import { useAuth } from "../context/AuthContext";
 import "./layout.css";
 
@@ -25,6 +26,7 @@ export default function Layout() {
       <main className="app-main container">
         <Outlet />
       </main>
+      {user && <ChatWidget />}
     </div>
   );
 }

@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     PUBLIC_SHARE_RATE_LIMIT_MAX: int = 30
     PUBLIC_SHARE_RATE_LIMIT_WINDOW_SECONDS: float = 60.0
 
+    NVIDIA_NIM_API_KEY: str = ""
+    NVIDIA_NIM_BASE_URL: str = "https://integrate.api.nvidia.com/v1"
+    NVIDIA_NIM_MODEL: str = "meta/llama-3.1-8b-instruct"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 

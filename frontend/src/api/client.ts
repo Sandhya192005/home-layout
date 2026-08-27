@@ -1,4 +1,6 @@
 import type {
+  ChatRequestInput,
+  ChatResponse,
   FloorPlan,
   FloorPlanGenerateResponse,
   FloorPlanShare,
@@ -217,4 +219,7 @@ export const api = {
   // --- room layout editor ---
   updateRoomLayout: (projectId: number, floorPlanId: number, input: RoomLayoutUpdateInput) =>
     request<FloorPlan>(`/projects/${projectId}/floorplans/${floorPlanId}/rooms`, { method: "PUT", body: input }),
+
+  // --- chat assistant ---
+  chat: (input: ChatRequestInput) => request<ChatResponse>("/chat", { method: "POST", body: input }),
 };

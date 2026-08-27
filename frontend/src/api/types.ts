@@ -160,6 +160,20 @@ export interface RoomLayoutUpdateInput {
   rooms: Record<string, RoomRectUpdate>;
 }
 
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ChatRequestInput {
+  messages: ChatMessage[];
+  project_id?: number | null;
+}
+
+export interface ChatResponse {
+  reply: string;
+}
+
 export interface FloorData {
   floor_number: number;
   label: string;
