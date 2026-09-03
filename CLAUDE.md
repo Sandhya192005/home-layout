@@ -6,23 +6,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Takes a customer's home-building requirements (plot size, family size, room
 program, parking, floors, budget, Vastu preference) and procedurally
-generates a customized 2D floor plan (rooms, walls, doors, windows,
-furniture, parking, staircase) — sized and positioned specifically for that
-input, not a fixed template. Floor-plan generation itself is pure geometry
-(no LLM/external AI API involved), and the "AI suggestions" feature is a
-deterministic rule-based engine (isolated so it could later be swapped for
-a real LLM call). The one place an external AI API *is* used is the house
-Q&A chat assistant (`services/chat_assistant.py`, `POST /api/v1/chat`),
-which calls an NVIDIA NIM-hosted LLM (OpenAI-compatible chat completions) —
-see below.
+generates a customized 2D (and now 3D) floor plan (rooms, walls, doors,
+windows, furniture, parking, staircase) — sized and positioned specifically
+for that input, not a fixed template. Floor-plan generation, cost/BOQ
+estimation, and manual post-generation edits (drag-resize, attaching a
+bathroom to a room) are all pure geometry/rule-based logic — no LLM
+involved. The one place an external AI API *is* used is the house Q&A chat
+assistant (`services/chat_assistant.py`, `POST /api/v1/chat`), which calls
+an NVIDIA NIM-hosted LLM (OpenAI-compatible chat completions) — see below.
+(An earlier "AI suggestions" feature was removed early on — `alembic/
+versions/0003_drop_ai_suggestions.py` — don't resurrect references to it.)
 
 Two independent apps in one repo: `backend/` (FastAPI + PostgreSQL) and
 `frontend/` (React 19 + Vite + TypeScript), talking over a REST API.
 
 Note: `PROJECT_STATUS.md` says the frontend is "not built yet" — that is
 stale. The frontend under `frontend/src/` is fully implemented (auth,
-project/requirement flow, SVG floor-plan viewer, furniture editor, PNG/PDF
-export, shareable public links).
+project/requirement flow, SVG floor-plan viewer plus a Three.js 3D view,
+furniture editor, manual room-layout editor, PNG/PDF export, shareable
+public links, version compare).
 
 ## Commands
 
@@ -58,6 +60,19 @@ python backend/scripts/smoke_test_generator.py   # exercises the layout engine d
 python backend/scripts/smoke_test_api.py          # full HTTP flow: register -> project -> requirement -> generate -> regenerate -> cross-user 403 check
 ```
 
+On Windows, `uvicorn --reload`'s file watcher can occasionally stop picking
+up further changes after the first reload (silently keeps serving stale
+code with no error in the log). If edits don't seem to take effect, check
+for more than one process listening on port 8000 (`netstat -ano | grep
+:8000` in Bash, `Get-NetTCPConnection -LocalPort 8000` in PowerShell).
+Before killing anything, confirm via the process's command line (`Get-
+CimInstance Win32_Process -Filter "Name='python.exe'" | Select
+ProcessId,CommandLine`) that it's actually a `uvicorn`/`multiprocessing.spawn`
+worker for *this* app, not an unrelated python process on the machine —
+then kill all of them and start one fresh instance. Verify the fix by
+confirming the route you expect is in `curl
+http://127.0.0.1:8000/api/v1/openapi.json`, not just that the server responds.
+
 ### Frontend (`frontend/`)
 
 ```bash
@@ -71,6 +86,34 @@ npm run lint                   # oxlint
 
 No frontend test runner is configured.
 
+## Safety and quality gates
+
+The automated backend test suite (above) is fully isolated (in-memory
+SQLite) and safe to run freely. Manually verifying a change against a
+*running* backend (browser, curl, a scratch Python script) talks to
+whatever `DATABASE_URL` points at — typically a real local Postgres with
+real project data in it. Use a throwaway project (and delete it or its
+extra floor-plan versions afterward) rather than generating test versions
+inside the user's actual projects.
+
+- **Backend has no static analysis** — no ruff/black/mypy/flake8 configured
+  (check `requirements.txt` if that ever changes). `pytest` is the only
+  automated gate. There is also no CI pipeline in this repo at all; running
+  the suite locally before calling backend work done is the only check that
+  happens.
+- Any change to `services/floorplan_generator.py` or `services/geometry.py`
+  is shared by every layout/editing feature — run the **full** backend
+  suite afterward (`pytest`), not just a test file for the feature you
+  touched. `test_generation.py`, `test_room_layout.py`,
+  `test_parking_layout.py`, and `test_attached_bathroom.py` all exercise
+  this shared code from different angles and have each independently caught
+  regressions here.
+- `npm run lint` (oxlint, config in `.oxlintrc.json`) only enables
+  `react/rules-of-hooks` and `react/only-export-components` beyond the
+  defaults, and is **not** type-aware — it will not catch type errors.
+  `npm run build` (`tsc -b && vite build`) is the real type-checking gate
+  for the frontend.
+
 ## Backend architecture
 
 ```
@@ -78,16 +121,15 @@ app/
   core/       config (env-driven Settings), DB session, JWT/password security,
               rate_limit.py (in-process per-IP limiter, applied to the public
               share endpoint)
-  models/     SQLAlchemy ORM (User, Project, Requirement, FloorPlan, FloorPlanShare)
+  models/     SQLAlchemy ORM (User, Project, Requirement, FloorPlan, FloorPlanShare, RefreshToken)
   schemas/    Pydantic request/response models
   crud/       DB access functions
-  api/v1/     FastAPI routers (auth, projects, requirements, floorplans, public)
+  api/v1/     FastAPI routers (auth, projects, requirements, floorplans, public, chat)
   services/
-    floorplan_generator.py  the dynamic layout engine (see below) — 900 lines, the core of the project
+    floorplan_generator.py  the dynamic layout engine (see below) — 1200+ lines, the core of the project
     geometry.py               rectangle/wall/door math helpers
     validation.py              requirement sanity checks
-    cost_estimator.py          budget/tier estimation
-    ai_suggestions.py          rule-based (non-LLM) design suggestions
+    cost_estimator.py          budget/BOQ/timeline/FAR estimation
     chat_assistant.py          house Q&A chat -- the one LLM/external-API call in the app (NVIDIA NIM)
   utils/constants.py    room library (sizes, Vastu zones, furniture), setback rules — swap these for a real locality's code
 alembic/versions/   hand-written migrations (no autogenerate configured — write revisions manually)
@@ -97,6 +139,14 @@ Every model mixes in `AuditMixin` (`app/models/mixins.py`): `created_at` /
 `updated_at` / `deleted_at` / `deleted_by` / `is_active`. **Soft delete
 only** — rows are flagged, never physically removed; read queries must
 filter on `is_active` / `deleted_at`.
+
+Auth issues a rotating refresh-token pair (`POST /auth/login` returns both an
+access and a refresh token; `POST /auth/refresh` revokes the presented
+refresh token and issues a fresh pair — single-use rotation, not a
+long-lived reusable token). Only a sha256 hash of the refresh token is
+stored (`RefreshToken.token_hash`); `FloorPlanShare`, by contrast, stores its
+token in the clear since that one is a link meant to be shared, not a bearer
+secret.
 
 ### Floor-plan generation pipeline (`services/floorplan_generator.py`)
 
@@ -133,30 +183,67 @@ preference changes the plan.
 7. **Walls, doors, windows, furniture** derived from final room rects:
    exterior outline + shared interior walls, an entrance door plus one
    internal door per room on its largest shared wall, windows on
-   exterior-facing habitable rooms, simple wall-anchored furniture.
+   exterior-facing habitable rooms, simple wall-anchored furniture. Doors
+   are built as a Kruskal's-style spanning **tree** over every pair of rooms
+   sharing a wall wide enough for a doorway (widest wall first) — a tree,
+   not a general graph, so every room has exactly the doors it needs and no
+   redundant ones; this matters when editing geometry later (see below).
 
 Known simplification: every floor shares the same footprint (no
 upper-floor step-backs), except the "independent-floor duplex mode" noted
 in recent commits which allows floors to diverge.
 
+### Manual editing after generation
+
+Three endpoints mutate an existing `FloorPlan.plan_data` in place rather
+than regenerating from scratch, all funneling through the same two
+functions: `recompute_floor_geometry(floor, facing)` (rebuilds
+windows/doors/walls for one floor from its rooms' *current* x/y/width/length)
+and `rooms_are_connected(room_ids, doors)` (union-find check over the
+rebuilt door graph) — reusing exactly the derivation the initial generation
+pipeline uses so a hand-edited layout keeps the same guarantees:
+
+- `PUT .../rooms` — drag-move/resize a room (frontend room-layout editor).
+- `PUT .../parking` — drag-resize the parking rect.
+- `POST` / `DELETE .../rooms/{room_id}/attached-bathroom` — carve a bathroom
+  out of an eligible room (or remove one), via `add_attached_bathroom` /
+  `remove_attached_bathroom`, scoring and trial-validating candidate edges
+  before committing.
+
+Two invariants this pattern exists to protect — a rect can only be split
+along a *full* edge (never a corner notch, which would need unsupported
+polygon rooms), and anything rebuilding doors/walls from already-rounded
+stored rects needs a larger touch-tolerance than the initial generation
+pass or it can silently disconnect rooms — are written up in full in
+**`.claude/rules/room-geometry.md`**; read that before touching this code.
+The **`add-geometry-endpoint`** skill has the step-by-step pattern (trial-
+copy-then-commit, candidate scoring, required test coverage) for adding
+another endpoint like these.
+
 ### Key API routes (`app/api/v1/`, prefixed `/api/v1`)
 
-- `auth`: `/auth/register`, `/auth/login` (OAuth2 form), `/auth/me`
+- `auth`: `/auth/register`, `/auth/login` (OAuth2 form), `/auth/refresh`
+  (rotates the refresh token), `/auth/logout`, `/auth/me`
 - `projects`: CRUD at `/projects`, `/projects/{id}`
 - `requirements`: `POST /projects/{id}/requirements` (validates via
   `services/validation.py`), `GET .../latest`,
   `POST /projects/{id}/requirements/{req_id}/generate` — runs the
-  generator + `ai_suggestions.py`, persists a new `FloorPlan` version
+  generator + cost/BOQ/timeline/FAR estimation, persists a new `FloorPlan`
+  version
 - `floorplans`: `/projects/{id}/floorplans`, `.../latest`,
   `GET/PATCH/DELETE .../{floor_plan_id}`,
   `PUT .../{floor_plan_id}/furniture` (furniture-editor updates),
+  `PUT .../{floor_plan_id}/rooms` / `.../parking` (manual layout edits),
+  `POST/DELETE .../{floor_plan_id}/rooms/{room_id}/attached-bathroom`,
   `POST/GET/DELETE .../{floor_plan_id}/share` (create/fetch/revoke a
   public share token, backed by `FloorPlanShare`)
 - `public`: `GET /public/floorplans/{token}` — unauthenticated read of a
   shared plan
 - `chat`: `POST /chat` — house Q&A chat assistant; auth required, optional
   `project_id` grounds the answer with that project's latest
-  requirement/floor-plan summary. See below.
+  requirement/floor-plan summary (the frontend's `ChatWidget` currently
+  never sends this — chat answers are never actually project-grounded in
+  practice today, only via direct API calls)
 
 Regenerating a requirement bumps `FloorPlan.version` rather than mutating
 the existing row — plan history per project is preserved.
@@ -171,34 +258,57 @@ an unset API key makes the endpoint return `503` rather than failing at
 startup, so the rest of the app works with zero chat configuration.
 `ChatNotConfiguredError` (→ 503) vs `ChatAssistantError` (→ 502, any other
 upstream failure) are distinguished so the frontend can tell "feature off"
-from "request failed." When `project_id` is passed, the caller's latest
-`Requirement`/`FloorPlan` are summarized into the system prompt so
-project-specific questions ("why is my kitchen small?") work too.
+from "request failed."
 
 ## Frontend architecture
 
 ```
 src/
   api/client.ts   thin fetch wrapper (api.* namespace); JWT stored in
-                  localStorage under "ahl_token"; ApiError normalizes
+                  localStorage under "ahl_token", refresh token under
+                  "ahl_refresh_token"; a 401 triggers one deduped silent
+                  refresh-and-retry before surfacing; ApiError normalizes
                   FastAPI/Pydantic error shapes into a message string
   api/types.ts    TypeScript mirrors of backend schemas
   context/AuthContext.tsx   auth state, wraps the whole app
   components/
     Layout.tsx, ProtectedRoute.tsx     routing shell / auth gate
-    FloorPlanViewer.tsx   the big one (~1000 lines) — renders the plan_data
-                          JSON as SVG, drag-to-edit furniture, PNG export
-                          (canvas.toBlob) and PDF export via a hand-rolled
-                          minimal PDF builder (buildMinimalPdf) — no
-                          pdf/canvas libraries are in package.json
+    FloorPlanViewer.tsx   the big one (~2000 lines) — renders plan_data as
+                          SVG, drag-to-edit furniture and room layout (4
+                          corner resize handles + drag-a-shared-wall to
+                          resize two rooms at once), attached-bathroom
+                          add/remove buttons in the room schedule, PNG
+                          export (canvas.toBlob) and PDF export via a
+                          hand-rolled minimal PDF builder (buildMinimalPdf,
+                          no pdf/canvas libraries in package.json)
+    FloorPlan3DView.tsx   Three.js (OrbitControls) 3D walkthrough of the
+                          same plan_data — rebuilds rooms/furniture/roof/
+                          parked-vehicle meshes procedurally from the plan
+                          JSON, no separate 3D data model. Furniture items
+                          store `w`/`l` as their *post-rotation* bounding
+                          box (rotation is a separate field) — building a
+                          correctly-oriented mesh requires un-swapping back
+                          to the natural pose first (`rotation % 180 !== 0`
+                          means swapped), mirroring the exact transform the
+                          2D SVG icon renderer already uses.
     furnitureIcons.ts, siteIcons.ts    icon/glyph lookups keyed by type
     ChatWidget.tsx   floating "Ask about your house" chat panel, mounted in
                      Layout.tsx for any logged-in user; calls POST /chat
   pages/
     LoginPage, RegisterPage, ProjectsPage, ProjectDetailPage (requirement
-    form + generate + plan history), SharedFloorPlanPage (public,
-    unauthenticated view via /share/:token)
+    form + generate + plan history + version compare), SharedFloorPlanPage
+    (public, unauthenticated view via /share/:token)
 ```
+
+**Gotcha**: `FloorPlanViewer.tsx` renders the plan two different ways that
+must not be confused when reading or testing it. A static SVG string built
+by `buildFloorSvg` and injected via `dangerouslySetInnerHTML` (produces
+`.room-outline`, `.room-label`, etc., driven by `floor.rooms` from props —
+**never updates during a live drag**), versus an interactive JSX overlay
+rendered only in room-layout-edit mode (produces `.room-edit-rect`,
+`.room-edit-handle`, etc., driven by live `localRooms` state — **does**
+update live during drags). Checking `.room-outline` to see whether a drag
+"worked" will always show no change regardless of the actual result.
 
 Routing (`App.tsx`): `/login`, `/register` are public;
 `/share/:token` renders inside the shared `Layout` but without
