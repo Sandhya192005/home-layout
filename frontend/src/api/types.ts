@@ -266,6 +266,16 @@ export interface AttachedBathroomResponse {
   warnings: string[];
 }
 
+export interface RoomReplaceInput {
+  floor_number: number;
+  new_type: string;
+}
+
+export interface RoomReplaceResponse {
+  floor_plan: FloorPlan;
+  warnings: string[];
+}
+
 export interface FurnitureLayoutUpdateInput {
   floor_number: number;
   furniture_by_room: Record<string, FurnitureItem[]>;

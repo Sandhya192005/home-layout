@@ -6,12 +6,15 @@ import type {
   FloorPlanGenerateResponse,
   FloorPlanShare,
   FurnitureLayoutUpdateInput,
+  PlanData,
   Project,
   PublicFloorPlan,
   Requirement,
   RequirementInput,
   ParkingLayoutUpdateInput,
   RoomLayoutUpdateInput,
+  RoomReplaceInput,
+  RoomReplaceResponse,
   User,
 } from "./types";
 
@@ -235,6 +238,20 @@ export const api = {
       `/projects/${projectId}/floorplans/${floorPlanId}/rooms/${roomId}/attached-bathroom?floor_number=${floorNumber}`,
       { method: "DELETE" }
     ),
+
+  // --- replace room ---
+  replaceRoom: (projectId: number, floorPlanId: number, roomId: string, input: RoomReplaceInput) =>
+    request<RoomReplaceResponse>(`/projects/${projectId}/floorplans/${floorPlanId}/rooms/${roomId}/replace`, {
+      method: "PUT",
+      body: input,
+    }),
+
+  // --- undo/redo: restore a previously-returned plan_data snapshot ---
+  restorePlanData: (projectId: number, floorPlanId: number, planData: PlanData) =>
+    request<FloorPlan>(`/projects/${projectId}/floorplans/${floorPlanId}/plan-data`, {
+      method: "PUT",
+      body: { plan_data: planData },
+    }),
 
   // --- chat assistant ---
   chat: (input: ChatRequestInput) => request<ChatResponse>("/chat", { method: "POST", body: input }),

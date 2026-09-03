@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { CompoundWallStyle, FloorData, FurnitureItem, GateStyle, PlanData, RoomData } from "../api/types";
 import { furnitureIconMarkup } from "./furnitureIcons";
@@ -78,6 +78,33 @@ const ATTACHED_BATHROOM_INELIGIBLE_TYPES = new Set([
   "bathroom", "accessible_bathroom", "staircase", "veranda", "foyer",
   "balcony", "utility", "pooja_room", "kitchen",
 ]);
+
+/** Mirrors the backend's `ROOM_REPLACE_INELIGIBLE_TYPES` -- staircase,
+ * veranda and foyer are placed automatically by the generator (fixed strip,
+ * pinned to the street-facing edge) and can't be swapped in or out here. */
+const ROOM_REPLACE_INELIGIBLE_TYPES = new Set(["staircase", "veranda", "foyer"]);
+
+/** Mirrors the backend's `ROOM_LIBRARY` labels for every type a room can be
+ * replaced with (i.e. every type minus the ones above). */
+const REPLACEABLE_ROOM_TYPES: { value: string; label: string }[] = [
+  { value: "living_room", label: "Living Room" },
+  { value: "master_bedroom", label: "Master Bedroom" },
+  { value: "bedroom", label: "Bedroom" },
+  { value: "kitchen", label: "Kitchen" },
+  { value: "dining_room", label: "Dining Room" },
+  { value: "pooja_room", label: "Pooja Room" },
+  { value: "study_room", label: "Study Room" },
+  { value: "bathroom", label: "Bathroom" },
+  { value: "accessible_bathroom", label: "Accessible Bathroom" },
+  { value: "utility", label: "Utility Room" },
+  { value: "balcony", label: "Balcony" },
+  { value: "home_office", label: "Home Office" },
+  { value: "servant_room", label: "Servant Room" },
+  { value: "store_room", label: "Store Room" },
+  { value: "guest_room", label: "Guest Room" },
+  { value: "gym", label: "Gym" },
+  { value: "library", label: "Library" },
+];
 
 interface RoomRect {
   x: number;
@@ -694,11 +721,23 @@ export default function FloorPlanViewer({
   projectId,
   floorPlanId,
   onFurnitureSaved,
+  onUndo,
+  onRedo,
+  canUndo = false,
+  canRedo = false,
+  undoRedoBusy = false,
+  undoRedoError = null,
 }: {
   plan: PlanData;
   projectId?: number;
   floorPlanId?: number;
   onFurnitureSaved?: (planData: PlanData) => void;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  undoRedoBusy?: boolean;
+  undoRedoError?: string | null;
 }) {
   const [activeFloorIdx, setActiveFloorIdx] = useState(0);
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
@@ -731,6 +770,12 @@ export default function FloorPlanViewer({
   const [attachedBathroomBusy, setAttachedBathroomBusy] = useState<string | null>(null);
   const [attachedBathroomError, setAttachedBathroomError] = useState<string | null>(null);
   const [attachedBathroomNotice, setAttachedBathroomNotice] = useState<string | null>(null);
+
+  const [replacingRoomId, setReplacingRoomId] = useState<string | null>(null);
+  const [replaceSelection, setReplaceSelection] = useState<string>("");
+  const [replaceBusy, setReplaceBusy] = useState<string | null>(null);
+  const [replaceError, setReplaceError] = useState<string | null>(null);
+  const [replaceNotice, setReplaceNotice] = useState<string | null>(null);
 
   const floor = plan.floors[activeFloorIdx];
   const isEditingThisFloor = editingFloorIdx === activeFloorIdx;
@@ -1032,8 +1077,67 @@ export default function FloorPlanViewer({
     }
   }
 
+  function startReplaceRoom(room: RoomData) {
+    setReplacingRoomId(room.id);
+    setReplaceSelection("");
+    setReplaceError(null);
+    setReplaceNotice(null);
+  }
+
+  function cancelReplaceRoom() {
+    setReplacingRoomId(null);
+    setReplaceSelection("");
+    setReplaceError(null);
+  }
+
+  async function confirmReplaceRoom(room: RoomData) {
+    if (!editable || replaceBusy || !replaceSelection) return;
+    setReplaceBusy(room.id);
+    setReplaceError(null);
+    setReplaceNotice(null);
+    try {
+      const result = await api.replaceRoom(projectId!, floorPlanId!, room.id, {
+        floor_number: floor.floor_number,
+        new_type: replaceSelection,
+      });
+      onFurnitureSaved?.(result.floor_plan.plan_data);
+      if (result.warnings.length > 0) setReplaceNotice(result.warnings.join(" "));
+      setReplacingRoomId(null);
+      setReplaceSelection("");
+    } catch (err) {
+      setReplaceError(err instanceof ApiError ? err.message : "Could not replace this room");
+    } finally {
+      setReplaceBusy(null);
+    }
+  }
+
   const isEditingRoomsThisFloor = editingRoomsFloorIdx === activeFloorIdx;
   const MIN_ROOM_SIZE = 3;
+
+  // Ctrl/Cmd+Z to undo, Ctrl/Cmd+Shift+Z (or Ctrl+Y) to redo -- disabled
+  // while typing in a form field, and while a local edit (furniture/room
+  // drag) hasn't been saved or cancelled yet, same guard as the buttons.
+  useEffect(() => {
+    if (!editable || !onUndo) return;
+    function onKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      const typing = target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+      if (typing || isEditingThisFloor || isEditingRoomsThisFloor) return;
+      const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      const isUndoKey = mod && key === "z" && !e.shiftKey;
+      const isRedoKey = (mod && key === "z" && e.shiftKey) || (e.ctrlKey && key === "y");
+      if (!isUndoKey && !isRedoKey) return;
+      e.preventDefault();
+      if (isRedoKey) {
+        if (canRedo && !undoRedoBusy) onRedo?.();
+      } else if (canUndo && !undoRedoBusy) {
+        onUndo?.();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [editable, onUndo, onRedo, canUndo, canRedo, undoRedoBusy, isEditingThisFloor, isEditingRoomsThisFloor]);
 
   function startEditRooms() {
     const init: Record<string, RoomRect> = {};
@@ -1580,6 +1684,36 @@ export default function FloorPlanViewer({
               <span className="drawing-panel-floor">
                 {plan.meta.facing.charAt(0).toUpperCase() + plan.meta.facing.slice(1)} facing
               </span>
+              {editable && onUndo && (
+                <div className="undo-redo-group" role="group" aria-label="Undo/redo">
+                  <button
+                    type="button"
+                    className="btn btn-secondary undo-redo-btn"
+                    disabled={!canUndo || undoRedoBusy || isEditingThisFloor || isEditingRoomsThisFloor}
+                    title={
+                      isEditingThisFloor || isEditingRoomsThisFloor
+                        ? "Finish or cancel the current edit first"
+                        : "Undo last change"
+                    }
+                    onClick={onUndo}
+                  >
+                    ↶ Undo
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary undo-redo-btn"
+                    disabled={!canRedo || undoRedoBusy || isEditingThisFloor || isEditingRoomsThisFloor}
+                    title={
+                      isEditingThisFloor || isEditingRoomsThisFloor
+                        ? "Finish or cancel the current edit first"
+                        : "Redo last undone change"
+                    }
+                    onClick={onRedo}
+                  >
+                    ↷ Redo
+                  </button>
+                </div>
+              )}
               <div className="view-mode-toggle" role="group" aria-label="View mode">
                 <button
                   type="button"
@@ -1652,6 +1786,7 @@ export default function FloorPlanViewer({
               )}
             </div>
           </div>
+          {editable && undoRedoError && <div className="error-banner">{undoRedoError}</div>}
           {viewMode === "3d" ? (
             <FloorPlan3DView plan={plan} />
           ) : (
@@ -1889,6 +2024,8 @@ export default function FloorPlanViewer({
           <h2>Room schedule</h2>
           {editable && attachedBathroomError && <div className="error-banner">{attachedBathroomError}</div>}
           {editable && attachedBathroomNotice && <div className="notice-banner">{attachedBathroomNotice}</div>}
+          {editable && replaceError && <div className="error-banner">{replaceError}</div>}
+          {editable && replaceNotice && <div className="notice-banner">{replaceNotice}</div>}
           <table className="schedule">
             <thead>
               <tr>
@@ -1898,12 +2035,13 @@ export default function FloorPlanViewer({
                 <th className="num">Area</th>
                 <th></th>
                 {editable && <th></th>}
+                {editable && <th></th>}
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
+                <Fragment key={r.id}>
                 <tr
-                  key={r.id}
                   className={`sched-row ${activeRoomId === r.id ? "is-active" : ""}`}
                   onClick={() => setActiveRoomId((prev) => (prev === r.id ? null : r.id))}
                 >
@@ -1937,7 +2075,51 @@ export default function FloorPlanViewer({
                       )}
                     </td>
                   )}
+                  {editable && (
+                    <td className="replace-room-cell" onClick={(e) => e.stopPropagation()}>
+                      {ROOM_REPLACE_INELIGIBLE_TYPES.has(r.type) ? null : (
+                        <button
+                          type="button"
+                          className="replace-room-btn"
+                          disabled={replaceBusy === r.id}
+                          title={`Replace ${r.label} with a different room type`}
+                          onClick={() => (replacingRoomId === r.id ? cancelReplaceRoom() : startReplaceRoom(r))}
+                        >
+                          Replace
+                        </button>
+                      )}
+                    </td>
+                  )}
                 </tr>
+                {editable && replacingRoomId === r.id && (
+                  <tr className="replace-room-row" onClick={(e) => e.stopPropagation()}>
+                    <td colSpan={7}>
+                      <div className="replace-room-picker">
+                        <span>Replace {r.label} with:</span>
+                        <select value={replaceSelection} onChange={(e) => setReplaceSelection(e.target.value)}>
+                          <option value="">Choose a room type…</option>
+                          {REPLACEABLE_ROOM_TYPES.filter((t) => t.value !== r.type).map((t) => (
+                            <option key={t.value} value={t.value}>
+                              {t.label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          disabled={!replaceSelection || replaceBusy === r.id}
+                          onClick={() => confirmReplaceRoom(r)}
+                        >
+                          {replaceBusy === r.id ? "Replacing…" : "Apply"}
+                        </button>
+                        <button type="button" className="btn btn-secondary" onClick={cancelReplaceRoom}>
+                          Cancel
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>

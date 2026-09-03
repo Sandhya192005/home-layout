@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { api, ApiError } from "../api/client";
-import type { FloorPlan, FloorPlanShare, Project, Requirement, RequirementInput } from "../api/types";
+import type { FloorPlan, FloorPlanShare, PlanData, Project, Requirement, RequirementInput } from "../api/types";
 import { ADDITIONAL_ROOM_TYPES } from "../api/types";
 import FloorPlanViewer from "../components/FloorPlanViewer";
 import "./project-detail.css";
@@ -80,6 +80,66 @@ export default function ProjectDetailPage() {
   const [compareMode, setCompareMode] = useState(false);
   const [compareLeftId, setCompareLeftId] = useState<number | null>(null);
   const [compareRightId, setCompareRightId] = useState<number | null>(null);
+
+  // --- undo/redo over manual edits (furniture, room/parking resize,
+  // attached-bathroom, replace-room) -- every one of those funnels its
+  // result through applyPlanUpdate below, so this stays a single stack of
+  // whole plan_data snapshots rather than a bespoke inverse per edit type.
+  const MAX_UNDO_HISTORY = 20;
+  const [undoStack, setUndoStack] = useState<PlanData[]>([]);
+  const [redoStack, setRedoStack] = useState<PlanData[]>([]);
+  const [undoRedoBusy, setUndoRedoBusy] = useState(false);
+  const [undoRedoError, setUndoRedoError] = useState<string | null>(null);
+
+  // A different floor_plan row (version switch, regenerate, initial load)
+  // starts a fresh undo/redo history -- it isn't meaningful across rows.
+  useEffect(() => {
+    setUndoStack([]);
+    setRedoStack([]);
+    setUndoRedoError(null);
+  }, [floorPlan?.id]);
+
+  function applyPlanUpdate(newPlanData: PlanData) {
+    if (!floorPlan) return;
+    setUndoStack((stack) => [...stack.slice(-(MAX_UNDO_HISTORY - 1)), floorPlan.plan_data]);
+    setRedoStack([]);
+    setUndoRedoError(null);
+    setFloorPlan((fp) => (fp ? { ...fp, plan_data: newPlanData } : fp));
+  }
+
+  async function undo() {
+    if (!floorPlan || undoStack.length === 0 || undoRedoBusy) return;
+    const target = undoStack[undoStack.length - 1];
+    setUndoRedoBusy(true);
+    setUndoRedoError(null);
+    try {
+      const restored = await api.restorePlanData(pid, floorPlan.id, target);
+      setRedoStack((stack) => [...stack, floorPlan.plan_data]);
+      setUndoStack((stack) => stack.slice(0, -1));
+      setFloorPlan(restored);
+    } catch (err) {
+      setUndoRedoError(err instanceof ApiError ? err.message : "Could not undo");
+    } finally {
+      setUndoRedoBusy(false);
+    }
+  }
+
+  async function redo() {
+    if (!floorPlan || redoStack.length === 0 || undoRedoBusy) return;
+    const target = redoStack[redoStack.length - 1];
+    setUndoRedoBusy(true);
+    setUndoRedoError(null);
+    try {
+      const restored = await api.restorePlanData(pid, floorPlan.id, target);
+      setUndoStack((stack) => [...stack, floorPlan.plan_data]);
+      setRedoStack((stack) => stack.slice(0, -1));
+      setFloorPlan(restored);
+    } catch (err) {
+      setUndoRedoError(err instanceof ApiError ? err.message : "Could not redo");
+    } finally {
+      setUndoRedoBusy(false);
+    }
+  }
 
   useEffect(() => {
     api.getProject(pid).then(setProject).catch(() => setError("Could not load project"));
@@ -785,7 +845,13 @@ export default function ProjectDetailPage() {
                 plan={floorPlan.plan_data}
                 projectId={pid}
                 floorPlanId={floorPlan.id}
-                onFurnitureSaved={(planData) => setFloorPlan((fp) => (fp ? { ...fp, plan_data: planData } : fp))}
+                onFurnitureSaved={applyPlanUpdate}
+                onUndo={undo}
+                onRedo={redo}
+                canUndo={undoStack.length > 0}
+                canRedo={redoStack.length > 0}
+                undoRedoBusy={undoRedoBusy}
+                undoRedoError={undoRedoError}
               />
             </>
           ) : (

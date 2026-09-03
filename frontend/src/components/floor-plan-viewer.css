@@ -110,6 +110,15 @@
   color: var(--accent-ink);
 }
 
+.undo-redo-group {
+  display: inline-flex;
+  gap: 0.3rem;
+}
+.undo-redo-btn {
+  padding: 0.4rem 0.6rem;
+  font-size: 0.78rem;
+}
+
 .show-furniture-toggle {
   display: inline-flex;
   align-items: center;
@@ -568,4 +577,44 @@ table.schedule .zone {
   border-color: var(--danger);
   background: var(--danger-soft);
   color: var(--danger);
+}
+
+.replace-room-cell {
+  text-align: right;
+  white-space: nowrap;
+}
+.replace-room-btn {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.02em;
+  padding: 0.22rem 0.5rem;
+  border-radius: 3px;
+  border: 1px solid var(--surface-line);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+.replace-room-btn:hover {
+  filter: brightness(0.97);
+}
+.replace-room-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.replace-room-row td {
+  background: var(--accent-soft);
+  padding: 0.5rem 0.6rem;
+}
+.replace-room-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+}
+.replace-room-picker select {
+  padding: 0.3rem 0.4rem;
+  border-radius: 3px;
+  border: 1px solid var(--surface-line);
+  font-size: 0.82rem;
 }

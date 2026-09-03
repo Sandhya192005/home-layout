@@ -72,3 +72,22 @@ class AttachedBathroomCreate(BaseModel):
 class AttachedBathroomResponse(BaseModel):
     floor_plan: FloorPlanRead
     warnings: list[str] = []
+
+
+class RoomReplaceRequest(BaseModel):
+    floor_number: int
+    new_type: str
+
+
+class RoomReplaceResponse(BaseModel):
+    floor_plan: FloorPlanRead
+    warnings: list[str] = []
+
+
+class PlanDataRestore(BaseModel):
+    """Restores plan_data to a previously-returned snapshot -- what the
+    frontend's undo/redo stack sends back. Not itself re-validated against
+    geometry rules: the snapshot was already a server-returned, previously
+    committed state, so this only checks it has the right overall shape."""
+
+    plan_data: dict[str, Any]

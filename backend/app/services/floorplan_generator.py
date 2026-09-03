@@ -1249,3 +1249,118 @@ def remove_attached_bathroom(floor: dict, room_id: str, facing: str) -> list[str
             "Removing this bathroom left one or more rooms unreachable -- you may need to adjust the layout."
         )
     return warnings
+
+
+# ---------------------------------------------------------------------------
+# Replace room: change one room's type in place (e.g. Bathroom -> Kitchen),
+# reusing its existing rect exactly as-is rather than re-slicing the grid --
+# a pure relabel-plus-refurnish, not a resize. Only structural/entrance-role
+# room types (staircase/veranda/foyer) are off limits, since those carry
+# generation-time meaning (staircase stacks across floors at a fixed strip;
+# veranda/foyer are pinned to the street-facing edge) that a type swap alone
+# can't preserve.
+# ---------------------------------------------------------------------------
+
+ROOM_REPLACE_INELIGIBLE_TYPES = {"staircase", "veranda", "foyer"}
+WET_ROOM_TYPES = {"bathroom", "accessible_bathroom", "kitchen", "utility"}
+
+
+def replace_room(floor: dict, room_id: str, new_type: str, facing: str, vastu: bool) -> tuple[dict, list[str]]:
+    """Converts `room_id` (in place on `floor`) to `new_type`, keeping its
+    current x/y/width/length exactly as-is. Rebuilds that room's furniture
+    for the new type and re-derives windows/doors/walls (only this room's
+    own window can actually change, since doors/walls depend only on rects,
+    which are untouched). Returns (updated_room_dict, warnings). Raises
+    ValueError -- the caller turns this into a 400 -- if the replacement
+    isn't feasible, with a message explaining why."""
+    rooms_by_id = {r["id"]: r for r in floor["rooms"]}
+    room = rooms_by_id.get(room_id)
+    if room is None:
+        raise ValueError(f"Room '{room_id}' was not found on this floor.")
+    if new_type not in ROOM_LIBRARY:
+        raise ValueError(f"'{new_type}' isn't a recognized room type.")
+    if room["type"] == new_type:
+        raise ValueError(f"{room['label']} is already a {ROOM_LIBRARY[new_type]['label']}.")
+    if room["type"] in ROOM_REPLACE_INELIGIBLE_TYPES:
+        raise ValueError(f"A {room['label']} can't be replaced with another room type.")
+    if new_type in ROOM_REPLACE_INELIGIBLE_TYPES:
+        raise ValueError(
+            f"Can't replace {room['label']} with a {ROOM_LIBRARY[new_type]['label']} -- that room type is "
+            f"placed automatically by the generator and can't be created here."
+        )
+
+    new_meta = ROOM_LIBRARY[new_type]
+    rect = {"x": room["x"], "y": room["y"], "w": room["width"], "l": room["length"]}
+    tol = 0.25
+    if rect["w"] < new_meta["min_w"] - tol or rect["l"] < new_meta["min_l"] - tol:
+        raise ValueError(
+            f"A {new_meta['label']} needs at least {new_meta['min_w']:g}x{new_meta['min_l']:g} ft -- "
+            f"{room['label']} is only {rect['w']:g}x{rect['l']:g} ft, too small to convert."
+        )
+    min_area = new_meta["min_w"] * new_meta["min_l"]
+    if geo.rect_area(rect) < min_area - tol:
+        raise ValueError(
+            f"A {new_meta['label']} needs at least {min_area:g} sq ft -- {room['label']} is only "
+            f"{geo.rect_area(rect):g} sq ft, too small to convert."
+        )
+
+    outline = {"x": floor["outline"]["x"], "y": floor["outline"]["y"],
+               "w": floor["outline"]["width"], "l": floor["outline"]["length"]}
+    other_rects = [
+        {"x": o["x"], "y": o["y"], "w": o["width"], "l": o["length"]}
+        for o in floor["rooms"] if o["id"] != room_id
+    ]
+    if geo.rect_x2(rect) > outline["x"] + outline["w"] + 0.05 or geo.rect_y2(rect) > outline["y"] + outline["l"] + 0.05:
+        raise ValueError(f"{room['label']}'s footprint falls outside the buildable area -- this shouldn't happen.")
+    if any(geo.rects_overlap(rect, o, tolerance=0.05) for o in other_rects):
+        raise ValueError(f"{room['label']} overlaps another room -- this shouldn't happen.")
+
+    new_instance = RoomInstance(
+        room_id=room_id, room_type=new_type, label=new_meta["label"], weight=0, priority=0,
+        zones=[], habitable=new_meta["habitable"], min_w=new_meta["min_w"], min_l=new_meta["min_l"],
+        furniture=[dict(item) for item in new_meta["furniture"]], floor_index=0,
+        zone=room.get("zone"), rect=rect,
+    )
+
+    # Trial on a scratch copy first -- same safety net every other
+    # geometry-mutating endpoint uses, even though a type-only swap can't
+    # actually change the door/wall graph (both depend only on rects, which
+    # are unchanged here): it's what recomputes this room's window entry.
+    trial_rooms = [dict(r) for r in floor["rooms"]]
+    trial_room = next(r for r in trial_rooms if r["id"] == room_id)
+    trial_room["type"] = new_type
+    trial_room["label"] = new_meta["label"]
+    trial_room["furniture"] = _place_furniture(new_instance)
+    trial_floor = {"outline": floor["outline"], "rooms": trial_rooms, "doors": floor["doors"]}
+    recompute_floor_geometry(trial_floor, facing)
+    if not rooms_are_connected([r["id"] for r in trial_rooms], trial_floor["doors"]):
+        raise ValueError(f"Replacing {room['label']} would leave part of the house unreachable -- try a different room.")
+
+    floor["rooms"] = trial_rooms
+    floor["doors"] = trial_floor["doors"]
+    floor["windows"] = trial_floor["windows"]
+    floor["walls"] = trial_floor["walls"]
+
+    warnings: list[str] = []
+    has_window = any(w["room_id"] == room_id for w in floor["windows"])
+    on_exterior_wall = bool(geo.on_boundary(rect, outline))
+    if new_meta["habitable"] and not has_window:
+        warnings.append(
+            f"{new_meta['label']} doesn't reach an exterior wall, so it has no window -- plan for a mechanical "
+            f"exhaust fan or extra lighting instead."
+        )
+    if new_type in WET_ROOM_TYPES and not on_exterior_wall:
+        warnings.append(
+            f"{new_meta['label']} doesn't reach an exterior wall -- drainage/plumbing lines for it will need to "
+            f"route through an adjacent wet area, so confirm feasibility with a plumber before building."
+        )
+    if vastu:
+        zone = room.get("zone")
+        if zone and zone not in new_meta["zones"]:
+            warnings.append(
+                f"Vastu traditionally places a {new_meta['label']} in the "
+                f"{'/'.join(new_meta['zones'])} zone -- this room is in the {zone} zone."
+            )
+
+    room_dict = trial_room
+    return room_dict, warnings

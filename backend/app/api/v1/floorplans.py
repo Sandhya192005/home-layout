@@ -16,7 +16,10 @@ from app.schemas.floorplan import (
     FloorPlanStatusUpdate,
     FurnitureLayoutUpdate,
     ParkingLayoutUpdate,
+    PlanDataRestore,
     RoomLayoutUpdate,
+    RoomReplaceRequest,
+    RoomReplaceResponse,
 )
 from app.schemas.floorplan_share import FloorPlanShareRead
 from app.services import floorplan_generator as fpg
@@ -254,6 +257,40 @@ def _recalculate_estimates(db: Session, plan) -> None:
     plan.estimated_cost = cost["recommended_cost"]
 
 
+@router.put("/{floor_plan_id}/plan-data", response_model=FloorPlanRead)
+def restore_plan_data(
+    project_id: int,
+    floor_plan_id: int,
+    payload: PlanDataRestore,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Overwrites plan_data wholesale with a previously-returned snapshot --
+    what the frontend's undo/redo stack calls. Every other endpoint in this
+    file mutates plan_data incrementally and re-derives geometry from
+    scratch; this one exists because undo/redo needs to restore *any* prior
+    state uniformly (furniture, room/parking resize, attached-bathroom,
+    room-replace) without a bespoke inverse for each edit type. Since the
+    snapshot was already a server-returned, previously committed plan_data,
+    it isn't re-run through geometry validation -- only checked for the
+    right overall shape."""
+    plan = _get_owned_floor_plan(db, project_id, floor_plan_id, current_user)
+    floors = payload.plan_data.get("floors")
+    meta = payload.plan_data.get("meta")
+    if not isinstance(floors, list) or not isinstance(meta, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="plan_data must include 'floors' and 'meta'."
+        )
+
+    plan.plan_data = payload.plan_data
+    _recalculate_estimates(db, plan)
+    flag_modified(plan, "plan_data")
+    plan.updated_by = current_user.id
+    db.commit()
+    db.refresh(plan)
+    return plan
+
+
 @router.post("/{floor_plan_id}/rooms/{room_id}/attached-bathroom", response_model=AttachedBathroomResponse)
 def add_attached_bathroom(
     project_id: int,
@@ -309,6 +346,37 @@ def remove_attached_bathroom(
     db.commit()
     db.refresh(plan)
     return AttachedBathroomResponse(floor_plan=FloorPlanRead.model_validate(plan), warnings=warnings)
+
+
+@router.put("/{floor_plan_id}/rooms/{room_id}/replace", response_model=RoomReplaceResponse)
+def replace_room(
+    project_id: int,
+    floor_plan_id: int,
+    room_id: str,
+    payload: RoomReplaceRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    plan = _get_owned_floor_plan(db, project_id, floor_plan_id, current_user)
+    floors = plan.plan_data.get("floors", [])
+    floor = next((f for f in floors if f.get("floor_number") == payload.floor_number), None)
+    if not floor:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Floor not found")
+
+    meta = plan.plan_data["meta"]
+    try:
+        _new_room, warnings = fpg.replace_room(
+            floor, room_id, payload.new_type, meta["facing"], meta.get("vastu_compliant", False)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    _recalculate_estimates(db, plan)
+    flag_modified(plan, "plan_data")
+    plan.updated_by = current_user.id
+    db.commit()
+    db.refresh(plan)
+    return RoomReplaceResponse(floor_plan=FloorPlanRead.model_validate(plan), warnings=warnings)
 
 
 def _get_owned_floor_plan(db: Session, project_id: int, floor_plan_id: int, current_user: User):
