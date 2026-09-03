@@ -452,10 +452,16 @@ export default function FloorPlan3DView({ plan }: { plan: PlanData }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [showRoof, setShowRoof] = useState(true);
   const [showFurniture, setShowFurniture] = useState(true);
+  const [floorFilter, setFloorFilter] = useState<number | "all">("all");
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+
+    const floorsToRender =
+      floorFilter === "all" ? plan.floors : plan.floors.filter((f) => f.floor_number === floorFilter);
+    const baseFloorNumber = floorsToRender[0]?.floor_number ?? 0;
+    const isTopFloorVisible = floorsToRender[floorsToRender.length - 1]?.floor_number === plan.floors[plan.floors.length - 1].floor_number;
 
     const scene = new THREE.Scene();
     const skyCanvas = document.createElement("canvas");
@@ -475,7 +481,7 @@ export default function FloorPlan3DView({ plan }: { plan: PlanData }) {
     const plotL = plan.meta.plot_length;
     const centerX = plotW / 2;
     const centerZ = plotL / 2;
-    const buildingHeight = plan.floors.length * FLOOR_HEIGHT;
+    const buildingHeight = floorsToRender.length * FLOOR_HEIGHT;
     const diag = Math.sqrt(plotW * plotW + plotL * plotL);
     scene.fog = new THREE.Fog(0xeceadf, diag * 1.1, diag * 3.6);
 
@@ -534,8 +540,8 @@ export default function FloorPlan3DView({ plan }: { plan: PlanData }) {
     plotEdges.position.set(centerX, 0.01, centerZ);
     scene.add(plotEdges);
 
-    for (const floor of plan.floors) {
-      const baseY = floor.floor_number * FLOOR_HEIGHT;
+    for (const floor of floorsToRender) {
+      const baseY = (floor.floor_number - baseFloorNumber) * FLOOR_HEIGHT;
       const o = floor.outline;
 
       // Floor slab
@@ -679,8 +685,8 @@ export default function FloorPlan3DView({ plan }: { plan: PlanData }) {
     // Gable roof on top of the highest floor: two sloped panels meeting at a
     // ridge (running along the building's longer axis) plus two triangular
     // end caps, instead of one flat slab -- reads much more like a real roof.
-    if (showRoof) {
-      const topOutline = plan.floors[plan.floors.length - 1].outline;
+    if (showRoof && isTopFloorVisible) {
+      const topOutline = floorsToRender[floorsToRender.length - 1].outline;
       const outerW = topOutline.width + ROOF_OVERHANG * 2;
       const outerL = topOutline.length + ROOF_OVERHANG * 2;
       const roofCx = topOutline.x + topOutline.width / 2;
@@ -769,12 +775,28 @@ export default function FloorPlan3DView({ plan }: { plan: PlanData }) {
         container.removeChild(renderer.domElement);
       }
     };
-  }, [plan, showRoof, showFurniture]);
+  }, [plan, showRoof, showFurniture, floorFilter]);
 
   return (
     <div className="drawing-3d-outer">
       <div ref={containerRef} className="drawing-3d-wrap" />
       <div className="drawing-3d-toggles">
+        {plan.floors.length > 1 && (
+          <label className="drawing-3d-roof-toggle">
+            Floors:{" "}
+            <select
+              value={floorFilter}
+              onChange={(e) => setFloorFilter(e.target.value === "all" ? "all" : Number(e.target.value))}
+            >
+              <option value="all">All floors</option>
+              {plan.floors.map((f) => (
+                <option key={f.floor_number} value={f.floor_number}>
+                  {f.label} only
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="drawing-3d-roof-toggle">
           <input type="checkbox" checked={showRoof} onChange={(e) => setShowRoof(e.target.checked)} />
           Show roof
