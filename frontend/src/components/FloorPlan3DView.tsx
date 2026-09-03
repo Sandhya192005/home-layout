@@ -313,16 +313,20 @@ function buildFurnitureMesh(type: string, w: number, l: number): THREE.Group {
   return group;
 }
 
-// Leads with a clean white/pearl finish (the common real-world case, and
-// what a single-car driveway should default to) then cycles through a few
-// other realistic showroom colors for lots with more than one car -- swapped
-// out from the earlier red/green/tan palette, which read as toy-like.
-const CAR_COLORS = [0xf1f0ec, 0x232323, 0xb7bcc2, 0x2f4a72, 0x7a1f1f, 0xd9d3c4];
+const CAR_COLORS = [0x3b82f6];
 
-function addWheel(group: THREE.Group, r: number, thickness: number, cx: number, cy: number, cz: number): void {
+function addWheel(
+  group: THREE.Group,
+  r: number,
+  thickness: number,
+  cx: number,
+  cy: number,
+  cz: number,
+  color = 0x1c1c1c
+): void {
   const mesh = new THREE.Mesh(
     new THREE.CylinderGeometry(r, r, thickness, 14),
-    new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.85, metalness: 0.1 })
+    new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0.1 })
   );
   mesh.rotation.z = Math.PI / 2;
   mesh.castShadow = true;
@@ -339,56 +343,108 @@ function buildCarMesh(w: number, h: number, colorIndex: number): THREE.Group {
   const group = new THREE.Group();
   const color = CAR_COLORS[colorIndex % CAR_COLORS.length];
   const paint = { roughness: 0.35, metalness: 0.45 };
+
+  // Real-world-scaled proportions: a ~1.85ft hull plus a ~1.55ft greenhouse
+  // above a 0.42ft ground clearance puts the roofline around 3.8ft, with
+  // wheel diameter (driven off vehicle length, clamped to a realistic tire
+  // size) landing close to the hull's top edge instead of dwarfing it --
+  // scaling wheel radius off the footprint alone (as a fixed hull height
+  // didn't) used to leave wheels several times taller than the body.
+  const groundClearance = 0.42;
+  const chassisH = 1.85;
   const chassisW = w * 0.86;
-  const chassisH = 0.55;
-  const chassisL = h * 0.88;
-  const bumperH = 0.3;
-  const bumperLen = h * 0.06;
+  const chassisL = h * 0.9;
+  const bumperH = chassisH * 0.55;
+  const bumperLen = h * 0.055;
+  const hullY = groundClearance + chassisH / 2;
+  const hullTopY = groundClearance + chassisH;
 
   // Main hull: doors, hood sides and trunk sides all live in this one box.
-  addBox(group, chassisW, chassisH, chassisL, color, 0, chassisH / 2, 0, 1, paint);
+  addBox(group, chassisW, chassisH, chassisL, color, 0, hullY, 0, 1, paint);
   // Front/rear bumpers step down and out slightly from the hull.
-  addBox(group, chassisW * 0.94, bumperH, bumperLen, 0x2c2c2c, 0, bumperH / 2, h / 2 - bumperLen / 2, 1, {
+  addBox(group, chassisW * 0.94, bumperH, bumperLen, 0x2c2c2c, 0, groundClearance + bumperH / 2, h / 2 - bumperLen / 2, 1, {
     roughness: 0.5,
     metalness: 0.2,
   });
-  addBox(group, chassisW * 0.94, bumperH, bumperLen, 0x2c2c2c, 0, bumperH / 2, -h / 2 + bumperLen / 2, 1, {
+  addBox(group, chassisW * 0.94, bumperH, bumperLen, 0x2c2c2c, 0, groundClearance + bumperH / 2, -h / 2 + bumperLen / 2, 1, {
     roughness: 0.5,
     metalness: 0.2,
+  });
+  // Front grille between the headlights.
+  addBox(group, chassisW * 0.3, bumperH * 0.5, 0.03, 0x1a1a1a, 0, groundClearance + bumperH * 0.55, h / 2 - 0.02, 1, {
+    roughness: 0.6,
+    metalness: 0.3,
   });
   // Greenhouse cabin: narrower and set back from center, leaving hood in
   // front and trunk behind exposed on the chassis top -- this is what makes
   // the silhouette actually read as a car instead of a loaf.
   const cabinW = chassisW * 0.72;
-  const cabinH = 0.55;
+  const cabinH = 1.55;
   const cabinL = chassisL * 0.46;
   const cabinCz = -h * 0.04;
-  addBox(group, cabinW, 0.06, cabinL, DARK_METAL, 0, chassisH + 0.03, cabinCz, 1, { roughness: 0.4 });
-  addBox(group, cabinW * 0.94, cabinH - 0.06, cabinL * 0.92, 0xb9ccd6, 0, chassisH + 0.06 + (cabinH - 0.06) / 2, cabinCz, 0.5, {
+  addBox(group, cabinW, 0.06, cabinL, DARK_METAL, 0, hullTopY + 0.03, cabinCz, 1, { roughness: 0.4 });
+  addBox(group, cabinW * 0.94, cabinH - 0.06, cabinL * 0.92, 0xb9ccd6, 0, hullTopY + 0.06 + (cabinH - 0.06) / 2, cabinCz, 0.5, {
     roughness: 0.08,
     metalness: 0.25,
   });
+  // Windshield and rear-glass slopes bridging the cabin roof edge down to
+  // the hood/trunk surface -- what turns the flat-topped hull + cabin into
+  // a recognizably sedan-shaped profile instead of a two-box loaf.
+  const glassFinish = { roughness: 0.06, metalness: 0.2 };
+  const slopeRun = cabinL * 0.3;
+  const slopeRise = cabinH * 0.85;
+  const slopeLen = Math.hypot(slopeRun, slopeRise);
+  const slopeAngle = Math.atan2(slopeRise, slopeRun);
+  const windshield = addBox(
+    group,
+    cabinW * 0.9,
+    0.04,
+    slopeLen,
+    GLASS,
+    0,
+    hullTopY + slopeRise / 2,
+    cabinCz + cabinL / 2 + slopeRun / 2,
+    0.55,
+    glassFinish
+  );
+  windshield.rotation.x = -slopeAngle;
+  const rearGlass = addBox(
+    group,
+    cabinW * 0.9,
+    0.04,
+    slopeLen,
+    GLASS,
+    0,
+    hullTopY + slopeRise / 2,
+    cabinCz - cabinL / 2 - slopeRun / 2,
+    0.55,
+    glassFinish
+  );
+  rearGlass.rotation.x = slopeAngle;
   // Side mirrors.
   for (const x of [-cabinW / 2 - 0.08, cabinW / 2 + 0.08]) {
-    addBox(group, 0.14, 0.1, 0.16, color, x, chassisH + cabinH * 0.55, cabinCz + cabinL * 0.35, 1, paint);
+    addBox(group, 0.14, 0.1, 0.16, color, x, hullTopY + cabinH * 0.55, cabinCz + cabinL * 0.35, 1, paint);
   }
   // Head/tail lights set into the bumpers.
-  addBox(group, chassisW * 0.32, 0.12, 0.05, 0xfff6d8, -chassisW * 0.28, bumperH * 0.7, h / 2 - 0.02, 1, {
+  const lightY = groundClearance + bumperH * 0.72;
+  addBox(group, chassisW * 0.32, 0.14, 0.05, 0xfff6d8, -chassisW * 0.28, lightY, h / 2 - 0.02, 1, {
     roughness: 0.15,
     metalness: 0.3,
   });
-  addBox(group, chassisW * 0.32, 0.12, 0.05, 0xfff6d8, chassisW * 0.28, bumperH * 0.7, h / 2 - 0.02, 1, {
+  addBox(group, chassisW * 0.32, 0.14, 0.05, 0xfff6d8, chassisW * 0.28, lightY, h / 2 - 0.02, 1, {
     roughness: 0.15,
     metalness: 0.3,
   });
-  addBox(group, chassisW * 0.32, 0.12, 0.05, 0xa32020, -chassisW * 0.28, bumperH * 0.7, -h / 2 + 0.02);
-  addBox(group, chassisW * 0.32, 0.12, 0.05, 0xa32020, chassisW * 0.28, bumperH * 0.7, -h / 2 + 0.02);
+  addBox(group, chassisW * 0.32, 0.12, 0.05, 0xa32020, -chassisW * 0.28, lightY, -h / 2 + 0.02);
+  addBox(group, chassisW * 0.32, 0.12, 0.05, 0xa32020, chassisW * 0.28, lightY, -h / 2 + 0.02);
 
-  const wheelR = Math.min(w, h) * 0.16;
-  const wheelT = w * 0.1;
+  const wheelR = THREE.MathUtils.clamp(h * 0.08, 0.85, 1.15);
+  const wheelT = THREE.MathUtils.clamp(w * 0.09, 0.35, 0.55);
   for (const x of [-chassisW / 2 + wheelR * 0.3, chassisW / 2 - wheelR * 0.3]) {
     for (const z of [-chassisL / 2 + wheelR * 1.2, chassisL / 2 - wheelR * 1.2]) {
       addWheel(group, wheelR, wheelT, x, wheelR, z);
+      // Hubcap on the outer face of each wheel.
+      addWheel(group, wheelR * 0.4, wheelT * 0.3, x + Math.sign(x) * wheelT * 0.36, wheelR, z, METAL);
     }
   }
   return group;
@@ -399,28 +455,108 @@ function buildCarMesh(w: number, h: number, colorIndex: number): THREE.Group {
  * (w, narrow), local z = front-to-back (h, long), front at +z. */
 function buildBikeMesh(w: number, h: number): THREE.Group {
   const group = new THREE.Group();
-  const wheelR = Math.min(w, h) * 0.22;
-  const wheelT = w * 0.32;
+  const bodyColor = 0xf59e0b;
+
+  // Real-world-scaled: a ~1ft wheel radius (a standard 17-18in rim + tire)
+  // and a seat/handlebar stack that lands in the ~2.4-3.3ft band a standard
+  // Indian commuter bike actually sits at, instead of everything being
+  // compressed down near the axles the way a pure wheelR-relative offset
+  // (e.g. rideH = wheelR + 0.1) used to leave it.
+  const wheelR = THREE.MathUtils.clamp(h * 0.15, 0.7, 0.95);
+  const wheelT = THREE.MathUtils.clamp(w * 0.22, 0.35, 0.55);
   const frontZ = h / 2 - wheelR * 1.2;
   const rearZ = -h / 2 + wheelR * 1.2;
   addWheel(group, wheelR, wheelT, 0, wheelR, frontZ);
   addWheel(group, wheelR, wheelT, 0, wheelR, rearZ);
 
-  const rideH = wheelR + 0.1;
-  addBox(group, w * 0.14, 0.14, h * 0.5, DARK_METAL, 0, rideH, -h * 0.02, 1, { roughness: 0.3, metalness: 0.6 });
-  addBox(group, w * 0.36, 0.3, h * 0.16, 0x1c1c1c, 0, rideH + 0.13, -h * 0.03, 1, { roughness: 0.4, metalness: 0.5 });
-  addBox(group, w * 0.3, 0.16, h * 0.17, DARK_METAL, 0, rideH + 0.34, h * 0.06, 1, { roughness: 0.25, metalness: 0.5 });
-  addBox(group, w * 0.42, 0.1, h * 0.24, 0x1c1c1c, 0, rideH + 0.42, -h * 0.22, 1, { roughness: 0.5 });
+  const frameY = wheelR + 0.6;
+  addBox(group, w * 0.14, 0.14, h * 0.5, DARK_METAL, 0, frameY, -h * 0.02, 1, { roughness: 0.3, metalness: 0.6 });
 
-  const fork = addBox(group, 0.08, 0.5, 0.08, METAL, 0, rideH + 0.22, frontZ - wheelR * 0.5, 1, {
+  // Engine block (cylinder head + crankcase), slung low between the wheels.
+  addBox(group, w * 0.42, wheelR * 0.95, h * 0.26, METAL, 0, wheelR * 0.52, -h * 0.02, 1, {
+    roughness: 0.3,
+    metalness: 0.75,
+  });
+  addBox(group, w * 0.3, wheelR * 0.5, h * 0.14, DARK_METAL, 0, wheelR * 1.05, h * 0.06, 1, {
+    roughness: 0.35,
+    metalness: 0.6,
+  });
+
+  // Fuel tank (body-colored, tapering toward the seat) and a long single
+  // seat running back to the rear fender -- the two features that read as
+  // "motorcycle silhouette" fastest, so sized to stay visible against the
+  // wheels rather than being a sliver lost between them.
+  addBox(group, w * 0.55, 0.42, h * 0.22, bodyColor, 0, frameY + 0.48, h * 0.1, 1, { roughness: 0.35, metalness: 0.4 });
+  addBox(group, w * 0.4, 0.28, h * 0.15, bodyColor, 0, frameY + 0.3, h * 0.24, 1, { roughness: 0.35, metalness: 0.4 });
+  addBox(group, w * 0.44, 0.18, h * 0.26, 0x1c1c1c, 0, frameY + 0.66, -h * 0.1, 1, { roughness: 0.55 });
+
+  // Exhaust header + muffler along the right side, engine to rear wheel.
+  const exhaustX = w * 0.26;
+  const exhaustY = wheelR * 0.42;
+  const exhaustFrontZ = h * 0.05;
+  const exhaustBackZ = rearZ + wheelR * 0.55;
+  const exhaustLen = exhaustFrontZ - exhaustBackZ;
+  const exhaustPipe = addCylinder(group, 0.05, 0.05, exhaustLen, METAL, exhaustX, exhaustY, exhaustBackZ + exhaustLen / 2, {
     roughness: 0.3,
     metalness: 0.7,
   });
-  fork.rotation.x = -0.3;
-  addBox(group, w * 0.55, 0.07, 0.05, DARK_METAL, 0, rideH + 0.46, frontZ - wheelR * 0.9);
+  exhaustPipe.rotation.x = Math.PI / 2;
+  const muffler = addCylinder(group, 0.09, 0.075, h * 0.16, DARK_METAL, exhaustX, exhaustY, exhaustBackZ, {
+    roughness: 0.35,
+    metalness: 0.5,
+  });
+  muffler.rotation.x = Math.PI / 2;
 
-  addBox(group, w * 0.28, 0.1, 0.05, 0xfff6d8, 0, rideH + 0.15, frontZ + 0.03, 1, { roughness: 0.15, metalness: 0.3 });
-  addBox(group, w * 0.22, 0.08, 0.05, 0xa32020, 0, rideH + 0.4, rearZ - 0.03);
+  // Front and rear mudguards arching over the wheels.
+  const frontFender = addBox(group, wheelT * 1.15, 0.05, wheelR * 1.3, DARK_METAL, 0, wheelR * 1.7, frontZ, 1, {
+    roughness: 0.4,
+    metalness: 0.4,
+  });
+  frontFender.rotation.x = -0.3;
+  const rearFender = addBox(group, wheelT * 1.15, 0.05, wheelR * 1.1, DARK_METAL, 0, wheelR * 1.75, rearZ - wheelR * 0.1, 1, {
+    roughness: 0.4,
+    metalness: 0.4,
+  });
+  rearFender.rotation.x = 0.2;
+
+  const forkTopY = frameY + 0.85;
+  const fork = addBox(
+    group,
+    0.08,
+    forkTopY - wheelR * 0.3,
+    0.08,
+    METAL,
+    0,
+    (forkTopY + wheelR * 0.3) / 2,
+    frontZ - wheelR * 0.5,
+    1,
+    { roughness: 0.3, metalness: 0.7 }
+  );
+  fork.rotation.x = -0.3;
+  addBox(group, w * 0.7, 0.08, 0.06, DARK_METAL, 0, forkTopY, frontZ - wheelR * 0.9);
+  // Handlebar grips at each end.
+  for (const gx of [-w * 0.35, w * 0.35]) {
+    const grip = addCylinder(group, 0.05, 0.05, w * 0.12, 0x1a1a1a, gx, forkTopY, frontZ - wheelR * 0.9, {
+      roughness: 0.6,
+    });
+    grip.rotation.z = Math.PI / 2;
+  }
+
+  // Round headlamp (typical of a standard Indian commuter motorcycle) --
+  // a flattened, forward-facing cylinder rather than a flat panel.
+  const headlampY = frameY + 0.55;
+  const headlampHousing = addCylinder(group, w * 0.24, w * 0.24, 0.04, DARK_METAL, 0, headlampY, frontZ - 0.02, {
+    roughness: 0.4,
+    metalness: 0.5,
+  });
+  headlampHousing.rotation.x = Math.PI / 2;
+  const headlamp = addCylinder(group, w * 0.19, w * 0.19, 0.06, 0xfff6d8, 0, headlampY, frontZ + 0.02, {
+    roughness: 0.15,
+    metalness: 0.3,
+  });
+  headlamp.rotation.x = Math.PI / 2;
+
+  addBox(group, w * 0.26, 0.08, 0.05, 0xa32020, 0, frameY + 0.65, rearZ - 0.03);
   return group;
 }
 
