@@ -93,6 +93,9 @@ export interface RoomData {
   area: number;
   below_min_size: boolean;
   furniture: FurnitureItem[];
+  attached_bathroom_id?: string | null;
+  attached_to?: string | null;
+  has_window?: boolean;
 }
 
 export interface WallData {
@@ -158,6 +161,11 @@ export interface RoomRectUpdate {
 export interface RoomLayoutUpdateInput {
   floor_number: number;
   rooms: Record<string, RoomRectUpdate>;
+}
+
+export interface ParkingLayoutUpdateInput {
+  floor_number: number;
+  parking: RoomRectUpdate;
 }
 
 export interface ChatMessage {
@@ -249,6 +257,11 @@ export interface FloorPlan extends AuditFields {
 }
 
 export interface FloorPlanGenerateResponse {
+  floor_plan: FloorPlan;
+  warnings: string[];
+}
+
+export interface AttachedBathroomResponse {
   floor_plan: FloorPlan;
   warnings: string[];
 }

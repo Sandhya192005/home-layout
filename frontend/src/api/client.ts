@@ -1,4 +1,5 @@
 import type {
+  AttachedBathroomResponse,
   ChatRequestInput,
   ChatResponse,
   FloorPlan,
@@ -9,6 +10,7 @@ import type {
   PublicFloorPlan,
   Requirement,
   RequirementInput,
+  ParkingLayoutUpdateInput,
   RoomLayoutUpdateInput,
   User,
 } from "./types";
@@ -219,6 +221,20 @@ export const api = {
   // --- room layout editor ---
   updateRoomLayout: (projectId: number, floorPlanId: number, input: RoomLayoutUpdateInput) =>
     request<FloorPlan>(`/projects/${projectId}/floorplans/${floorPlanId}/rooms`, { method: "PUT", body: input }),
+  updateParking: (projectId: number, floorPlanId: number, input: ParkingLayoutUpdateInput) =>
+    request<FloorPlan>(`/projects/${projectId}/floorplans/${floorPlanId}/parking`, { method: "PUT", body: input }),
+
+  // --- attached bathroom ---
+  addAttachedBathroom: (projectId: number, floorPlanId: number, roomId: string, floorNumber: number) =>
+    request<AttachedBathroomResponse>(
+      `/projects/${projectId}/floorplans/${floorPlanId}/rooms/${roomId}/attached-bathroom`,
+      { method: "POST", body: { floor_number: floorNumber } }
+    ),
+  removeAttachedBathroom: (projectId: number, floorPlanId: number, roomId: string, floorNumber: number) =>
+    request<AttachedBathroomResponse>(
+      `/projects/${projectId}/floorplans/${floorPlanId}/rooms/${roomId}/attached-bathroom?floor_number=${floorNumber}`,
+      { method: "DELETE" }
+    ),
 
   // --- chat assistant ---
   chat: (input: ChatRequestInput) => request<ChatResponse>("/chat", { method: "POST", body: input }),

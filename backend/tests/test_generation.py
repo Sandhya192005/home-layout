@@ -44,6 +44,29 @@ def test_get_latest_floor_plan(client, auth_headers, project, floor_plan):
     assert r.json()["id"] == floor_plan["id"]
 
 
+def test_deleting_all_floor_plans_restarts_version_numbering(client, auth_headers, project, requirement):
+    r1 = client.post(
+        f"/api/v1/projects/{project['id']}/requirements/{requirement['id']}/generate", headers=auth_headers
+    )
+    plan1 = r1.json()["floor_plan"]
+    r2 = client.post(
+        f"/api/v1/projects/{project['id']}/requirements/{requirement['id']}/generate", headers=auth_headers
+    )
+    plan2 = r2.json()["floor_plan"]
+    assert plan1["version"] == 1
+    assert plan2["version"] == 2
+
+    for plan in (plan1, plan2):
+        d = client.delete(f"/api/v1/projects/{project['id']}/floorplans/{plan['id']}", headers=auth_headers)
+        assert d.status_code == 204
+
+    r3 = client.post(
+        f"/api/v1/projects/{project['id']}/requirements/{requirement['id']}/generate", headers=auth_headers
+    )
+    assert r3.status_code == 200, r3.text
+    assert r3.json()["floor_plan"]["version"] == 1
+
+
 def test_latest_floor_plan_404_when_none_generated(client, auth_headers, project):
     r = client.get(f"/api/v1/projects/{project['id']}/floorplans/latest", headers=auth_headers)
     assert r.status_code == 404

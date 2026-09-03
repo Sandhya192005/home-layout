@@ -8,7 +8,7 @@ from app.models.floorplan import FloorPlan
 def get_next_version(db: Session, project_id: int) -> int:
     latest = (
         db.query(FloorPlan)
-        .filter(FloorPlan.project_id == project_id)
+        .filter(FloorPlan.project_id == project_id, FloorPlan.deleted_at.is_(None))
         .order_by(FloorPlan.version.desc())
         .first()
     )

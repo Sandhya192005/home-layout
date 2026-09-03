@@ -148,10 +148,22 @@
   padding: 0.3rem 0.5rem;
 }
 
-.version-compare-toggle {
+.version-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   margin-left: auto;
+}
+
+.version-compare-toggle {
   font-size: 0.78rem;
   padding: 0.3rem 0.7rem;
+}
+
+.version-delete-all {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.7rem;
+  white-space: nowrap;
 }
 
 .compare-panel {

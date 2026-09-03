@@ -123,23 +123,36 @@ def edges_of(r: dict) -> dict[str, tuple[float, float, float, float]]:
     }
 
 
-def shared_segment(rect_a: dict, rect_b: dict) -> tuple[str, str, tuple[float, float, float, float]] | None:
+def shared_segment(
+    rect_a: dict, rect_b: dict, tolerance: float = EPS
+) -> tuple[str, str, tuple[float, float, float, float]] | None:
     """If rect_a and rect_b share a collinear boundary segment, return
-    (side_on_a, side_on_b, overlap_segment). Otherwise None."""
+    (side_on_a, side_on_b, overlap_segment). Otherwise None.
+
+    `tolerance` controls how far apart the two edges may be and still count
+    as "touching". The default (exact-geometry EPS) suits the initial
+    generation pipeline, which computes every rect from a shared unrounded
+    layout pass, so two rooms meant to touch align exactly. Callers rebuilding
+    doors/walls from already-2-decimal-rounded, independently-stored rects
+    (`recompute_floor_geometry`, after a manual edit or an attached-bathroom
+    cut) should pass a larger tolerance -- otherwise a sub-hundredth-of-a-foot
+    rounding sliver between two rooms that were touching exactly at
+    generation time reads as a gap, silently dropping what should still be a
+    valid doorway candidate."""
     opposite = {"north": "south", "south": "north", "west": "east", "east": "west"}
     edges_a, edges_b = edges_of(rect_a), edges_of(rect_b)
     for side_a, (ax1, ay1, ax2, ay2) in edges_a.items():
         side_b = opposite[side_a]
         bx1, by1, bx2, by2 = edges_b[side_b]
         if side_a in ("north", "south"):
-            if abs(ay1 - by1) > EPS:
+            if abs(ay1 - by1) > tolerance:
                 continue
             lo = max(min(ax1, ax2), min(bx1, bx2))
             hi = min(max(ax1, ax2), max(bx1, bx2))
             if hi - lo > EPS:
                 return side_a, side_b, (lo, ay1, hi, ay1)
         else:
-            if abs(ax1 - bx1) > EPS:
+            if abs(ax1 - bx1) > tolerance:
                 continue
             lo = max(min(ay1, ay2), min(by1, by2))
             hi = min(max(ay1, ay2), max(by1, by2))

@@ -7,11 +7,22 @@ from app.api.v1.projects import _get_owned_project
 from app.core.database import get_db
 from app.crud import floorplan as floorplan_crud
 from app.crud import floorplan_share as share_crud
+from app.crud import requirement as requirement_crud
 from app.models.user import User
-from app.schemas.floorplan import FloorPlanRead, FloorPlanStatusUpdate, FurnitureLayoutUpdate, RoomLayoutUpdate
+from app.schemas.floorplan import (
+    AttachedBathroomCreate,
+    AttachedBathroomResponse,
+    FloorPlanRead,
+    FloorPlanStatusUpdate,
+    FurnitureLayoutUpdate,
+    ParkingLayoutUpdate,
+    RoomLayoutUpdate,
+)
 from app.schemas.floorplan_share import FloorPlanShareRead
 from app.services import floorplan_generator as fpg
 from app.services import geometry as geo
+from app.services.cost_estimator import estimate_boq, estimate_construction_timeline, estimate_cost, estimate_far
+from app.utils.constants import CAR_PARKING_SIZE, TWO_WHEELER_PARKING_SIZE
 
 router = APIRouter(prefix="/projects/{project_id}/floorplans", tags=["floorplans"])
 
@@ -220,11 +231,156 @@ def update_room_layout(
     return plan
 
 
+def _recalculate_estimates(db: Session, plan) -> None:
+    """Re-derive total_built_up_area, the cost/BOQ/timeline/FAR meta, and the
+    stored total_built_up_area/estimated_cost columns from the plan's current
+    room geometry -- shared by any endpoint that edits room geometry after
+    generation (the attached-bathroom add/remove routes below)."""
+    floors = plan.plan_data.get("floors", [])
+    total_area = round(sum(r["width"] * r["length"] for f in floors for r in f["rooms"]), 2)
+    plan.plan_data["meta"]["total_built_up_area"] = total_area
+    plan.total_built_up_area = total_area
+
+    requirement = requirement_crud.get_requirement(db, plan.requirement_id)
+    budget = requirement.budget if requirement else 0
+    cost = estimate_cost(total_area, budget)
+    plan.plan_data["meta"]["cost_estimate"] = cost
+    plan.plan_data["meta"]["boq"] = estimate_boq(total_area)
+    plan.plan_data["meta"]["construction_timeline"] = estimate_construction_timeline(
+        total_area, plan.plan_data["meta"]["floors"]
+    )
+    plot_area = plan.plan_data["meta"]["plot_length"] * plan.plan_data["meta"]["plot_width"]
+    plan.plan_data["meta"]["far"] = estimate_far(total_area, plot_area)
+    plan.estimated_cost = cost["recommended_cost"]
+
+
+@router.post("/{floor_plan_id}/rooms/{room_id}/attached-bathroom", response_model=AttachedBathroomResponse)
+def add_attached_bathroom(
+    project_id: int,
+    floor_plan_id: int,
+    room_id: str,
+    payload: AttachedBathroomCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    plan = _get_owned_floor_plan(db, project_id, floor_plan_id, current_user)
+    floors = plan.plan_data.get("floors", [])
+    floor = next((f for f in floors if f.get("floor_number") == payload.floor_number), None)
+    if not floor:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Floor not found")
+
+    meta = plan.plan_data["meta"]
+    try:
+        _new_room, warnings = fpg.add_attached_bathroom(floor, room_id, meta["facing"], meta.get("vastu_compliant", False))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    _recalculate_estimates(db, plan)
+    flag_modified(plan, "plan_data")
+    plan.updated_by = current_user.id
+    db.commit()
+    db.refresh(plan)
+    return AttachedBathroomResponse(floor_plan=FloorPlanRead.model_validate(plan), warnings=warnings)
+
+
+@router.delete("/{floor_plan_id}/rooms/{room_id}/attached-bathroom", response_model=AttachedBathroomResponse)
+def remove_attached_bathroom(
+    project_id: int,
+    floor_plan_id: int,
+    room_id: str,
+    floor_number: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    plan = _get_owned_floor_plan(db, project_id, floor_plan_id, current_user)
+    floors = plan.plan_data.get("floors", [])
+    floor = next((f for f in floors if f.get("floor_number") == floor_number), None)
+    if not floor:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Floor not found")
+
+    try:
+        warnings = fpg.remove_attached_bathroom(floor, room_id, plan.plan_data["meta"]["facing"])
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    _recalculate_estimates(db, plan)
+    flag_modified(plan, "plan_data")
+    plan.updated_by = current_user.id
+    db.commit()
+    db.refresh(plan)
+    return AttachedBathroomResponse(floor_plan=FloorPlanRead.model_validate(plan), warnings=warnings)
+
+
 def _get_owned_floor_plan(db: Session, project_id: int, floor_plan_id: int, current_user: User):
     _get_owned_project(db, project_id, current_user)
     plan = floorplan_crud.get_floor_plan(db, floor_plan_id)
     if not plan or plan.project_id != project_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Floor plan not found")
+    return plan
+
+
+def _parking_min_size(parking: dict) -> tuple[float, float]:
+    """Smallest width/length that still fits the parking's own declared
+    vehicle capacity -- a single vehicle's own footprint, not the sum of
+    all of them, since shrinking is meant to be allowed as long as at
+    least one vehicle of each kind present still physically fits."""
+    cars, bikes = parking["capacity_cars"], parking["capacity_two_wheelers"]
+    widths = [w for w, has in ((CAR_PARKING_SIZE["w"], cars), (TWO_WHEELER_PARKING_SIZE["w"], bikes)) if has]
+    depths = [l for l, has in ((CAR_PARKING_SIZE["l"], cars), (TWO_WHEELER_PARKING_SIZE["l"], bikes)) if has]
+    return (max(widths) if widths else 3.0, max(depths) if depths else 3.0)
+
+
+@router.put("/{floor_plan_id}/parking", response_model=FloorPlanRead)
+def update_parking_layout(
+    project_id: int,
+    floor_plan_id: int,
+    payload: ParkingLayoutUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    plan = _get_owned_floor_plan(db, project_id, floor_plan_id, current_user)
+
+    floors = plan.plan_data.get("floors", [])
+    floor = next((f for f in floors if f.get("floor_number") == payload.floor_number), None)
+    if not floor:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Floor not found")
+    if not floor.get("parking"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This floor has no parking to edit")
+
+    meta = plan.plan_data["meta"]
+    new_rect = {"x": payload.parking.x, "y": payload.parking.y, "w": payload.parking.width, "l": payload.parking.length}
+
+    eps = 1e-6
+    if (
+        new_rect["x"] < -eps
+        or new_rect["y"] < -eps
+        or geo.rect_x2(new_rect) > meta["plot_width"] + eps
+        or geo.rect_y2(new_rect) > meta["plot_length"] + eps
+    ):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Parking would extend outside the plot boundary.")
+
+    min_w, min_l = _parking_min_size(floor["parking"])
+    if payload.parking.width < min_w - eps or payload.parking.length < min_l - eps:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Parking needs at least {min_w:.0f}x{min_l:.0f} ft for the vehicles it's sized for.",
+        )
+
+    overlap_tolerance = 0.05
+    for room in floor["rooms"]:
+        room_rect = {"x": room["x"], "y": room["y"], "w": room["width"], "l": room["length"]}
+        if geo.rects_overlap(new_rect, room_rect, tolerance=overlap_tolerance):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Parking would overlap room '{room['id']}'.")
+
+    floor["parking"]["x"] = payload.parking.x
+    floor["parking"]["y"] = payload.parking.y
+    floor["parking"]["width"] = payload.parking.width
+    floor["parking"]["length"] = payload.parking.length
+
+    flag_modified(plan, "plan_data")
+    plan.updated_by = current_user.id
+    db.commit()
+    db.refresh(plan)
     return plan
 
 

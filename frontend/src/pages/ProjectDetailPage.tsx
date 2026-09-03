@@ -71,6 +71,8 @@ export default function ProjectDetailPage() {
   const [generating, setGenerating] = useState(false);
   const [deletingVersionId, setDeletingVersionId] = useState<number | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  const [deletingAllVersions, setDeletingAllVersions] = useState(false);
+  const [pendingDeleteAll, setPendingDeleteAll] = useState(false);
   const [share, setShare] = useState<FloorPlanShare | null>(null);
   const [shareBusy, setShareBusy] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
@@ -103,6 +105,12 @@ export default function ProjectDetailPage() {
     const t = setTimeout(() => setPendingDeleteId(null), 3000);
     return () => clearTimeout(t);
   }, [pendingDeleteId]);
+
+  useEffect(() => {
+    if (!pendingDeleteAll) return;
+    const t = setTimeout(() => setPendingDeleteAll(false), 3000);
+    return () => clearTimeout(t);
+  }, [pendingDeleteAll]);
 
   useEffect(() => {
     setShareCopied(false);
@@ -208,6 +216,35 @@ export default function ProjectDetailPage() {
       setError("Could not delete that version");
     } finally {
       setDeletingVersionId(null);
+    }
+  }
+
+  function handleDeleteAllVersionsClick() {
+    if (pendingDeleteAll) {
+      setPendingDeleteAll(false);
+      deleteAllVersions();
+    } else {
+      setPendingDeleteAll(true);
+    }
+  }
+
+  async function deleteAllVersions() {
+    if (deletingAllVersions || floorPlanVersions.length === 0) return;
+    setDeletingAllVersions(true);
+    try {
+      for (const v of floorPlanVersions) {
+        await api.revokeShare(pid, v.id).catch(() => {});
+        await api.deleteFloorPlan(pid, v.id);
+      }
+      setFloorPlanVersions([]);
+      setFloorPlan(null);
+      setCompareMode(false);
+      // next "Generate" now starts back at version 1, since no active floor plan remains for it to build on
+    } catch {
+      setError("Could not delete all versions -- some may remain");
+      setFloorPlanVersions(await api.listFloorPlans(pid).catch(() => []));
+    } finally {
+      setDeletingAllVersions(false);
     }
   }
 
@@ -539,7 +576,7 @@ export default function ProjectDetailPage() {
         </form>
 
         <div className="pd-results">
-          {floorPlanVersions.length > 1 && (
+          {floorPlanVersions.length > 0 && (
             <div className="version-row card">
               <span className="muted">Versions</span>
               {floorPlanVersions.map((v) => (
@@ -562,9 +599,22 @@ export default function ProjectDetailPage() {
                   </button>
                 </span>
               ))}
-              <button type="button" className="btn btn-secondary version-compare-toggle" onClick={toggleCompareMode}>
-                {compareMode ? "Close compare" : "Compare versions"}
-              </button>
+              <span className="version-row-actions">
+                {floorPlanVersions.length > 1 && (
+                  <button type="button" className="btn btn-secondary version-compare-toggle" onClick={toggleCompareMode}>
+                    {compareMode ? "Close compare" : "Compare versions"}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-danger version-delete-all"
+                  disabled={deletingAllVersions}
+                  title="Delete every version so the next generate starts back at version 1"
+                  onClick={handleDeleteAllVersionsClick}
+                >
+                  {deletingAllVersions ? "Deleting…" : pendingDeleteAll ? "Click again to confirm" : "Delete all versions"}
+                </button>
+              </span>
             </div>
           )}
 

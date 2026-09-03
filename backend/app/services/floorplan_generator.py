@@ -597,17 +597,27 @@ def compute_parking(
     room_rect = outline
     full_outline = geo.shrink_edge(full_rect, front_edge, extra_depth)
 
-    # Parking rect sits in the reclaimed strip nearest the West/North corner of the front edge.
+    # Parking rect sits in the reclaimed strip nearest the West/North corner
+    # of the front edge -- anchored to the *true plot boundary*, not
+    # `base_rect`'s edge, since open parking is allowed within the mandatory
+    # front setback itself. `base_rect`'s front edge already sits `front_sb`
+    # inside the plot boundary, so parking's depth (always exactly
+    # `depth_needed`, since front_sb + extra_depth == max(front_sb,
+    # depth_needed) >= depth_needed) has to start `front_sb` further out to
+    # end up flush with the receded `outline`/`full_outline` above, instead
+    # of overlapping the first `front_sb` feet of room space.
     if facing == "north":
-        parking = {"x": base_rect["x"], "y": base_rect["y"], "w": width_needed, "l": min(depth_needed, front_sb + extra_depth)}
+        parking = {"x": base_rect["x"], "y": base_rect["y"] - front_sb, "w": width_needed, "l": depth_needed}
     elif facing == "south":
-        total_depth = min(depth_needed, front_sb + extra_depth)
-        parking = {"x": base_rect["x"], "y": geo.rect_y2(base_rect) - total_depth, "w": width_needed, "l": total_depth}
+        parking = {
+            "x": base_rect["x"], "y": geo.rect_y2(base_rect) + front_sb - depth_needed, "w": width_needed, "l": depth_needed,
+        }
     elif facing == "west":
-        parking = {"x": base_rect["x"], "y": base_rect["y"], "w": min(depth_needed, front_sb + extra_depth), "l": width_needed}
+        parking = {"x": base_rect["x"] - front_sb, "y": base_rect["y"], "w": depth_needed, "l": width_needed}
     else:  # east
-        total_depth = min(depth_needed, front_sb + extra_depth)
-        parking = {"x": geo.rect_x2(base_rect) - total_depth, "y": base_rect["y"], "w": total_depth, "l": width_needed}
+        parking = {
+            "x": geo.rect_x2(base_rect) + front_sb - depth_needed, "y": base_rect["y"], "w": depth_needed, "l": width_needed,
+        }
 
     parking["capacity_cars"] = cars
     parking["capacity_two_wheelers"] = two_wheelers
@@ -686,7 +696,7 @@ def compute_main_gate(plot: dict, facing: str, parking: dict | None, entrance_do
 # Walls, doors, windows, furniture
 # ---------------------------------------------------------------------------
 
-def _build_walls(outline: dict, room_rects: list[dict]) -> list[dict]:
+def _build_walls(outline: dict, room_rects: list[dict], tolerance: float = geo.EPS) -> list[dict]:
     walls = []
     for side, seg in geo.edges_of(outline).items():
         walls.append({"x1": seg[0], "y1": seg[1], "x2": seg[2], "y2": seg[3],
@@ -694,7 +704,7 @@ def _build_walls(outline: dict, room_rects: list[dict]) -> list[dict]:
     seen = set()
     for i, a in enumerate(room_rects):
         for b in room_rects[i + 1:]:
-            shared = geo.shared_segment(a["rect"], b["rect"])
+            shared = geo.shared_segment(a["rect"], b["rect"], tolerance=tolerance)
             if not shared:
                 continue
             _, _, seg = shared
@@ -727,7 +737,9 @@ def _build_windows(rooms: list[RoomInstance], outline: dict) -> list[dict]:
     return windows
 
 
-def _build_doors(rooms: list[RoomInstance], outline: dict, facing: str, entrance_room_id: str | None) -> list[dict]:
+def _build_doors(
+    rooms: list[RoomInstance], outline: dict, facing: str, entrance_room_id: str | None, tolerance: float = geo.EPS
+) -> list[dict]:
     doors = []
     entrance_room = next((r for r in rooms if r.room_id == entrance_room_id), None) if entrance_room_id else None
     if entrance_room and entrance_room.rect:
@@ -745,7 +757,7 @@ def _build_doors(rooms: list[RoomInstance], outline: dict, facing: str, entrance
     candidates: list[tuple[float, tuple[float, float, float, float], RoomInstance, RoomInstance]] = []
     for i, a in enumerate(rects):
         for b in rects[i + 1:]:
-            shared = geo.shared_segment(a.rect, b.rect)
+            shared = geo.shared_segment(a.rect, b.rect, tolerance=tolerance)
             if not shared:
                 continue
             _, _, seg = shared
@@ -1004,9 +1016,17 @@ def recompute_floor_geometry(floor: dict, facing: str) -> None:
 
     room_dicts_for_walls = [{"id": ri.room_id, "rect": ri.rect} for ri in room_instances]
 
+    # Room rects here are already 2-decimal-rounded (each stored independently
+    # since generation, or just carved by an attached-bathroom cut), so two
+    # rooms meant to touch exactly can be a ~0.01ft rounding sliver apart --
+    # a larger tolerance than the initial (unrounded) generation pass keeps
+    # that from silently dropping a doorway/wall between them. Matches the
+    # overlap tolerance the room-layout-edit endpoint already uses for the
+    # same reason.
+    tolerance = 0.05
     floor["windows"] = _build_windows(room_instances, outline)
-    floor["doors"] = _build_doors(room_instances, outline, facing, entrance_id)
-    floor["walls"] = _build_walls(outline, room_dicts_for_walls)
+    floor["doors"] = _build_doors(room_instances, outline, facing, entrance_id, tolerance=tolerance)
+    floor["walls"] = _build_walls(outline, room_dicts_for_walls, tolerance=tolerance)
 
 
 def rooms_are_connected(room_ids: list[str], doors: list[dict]) -> bool:
@@ -1031,3 +1051,201 @@ def rooms_are_connected(room_ids: list[str], doors: list[dict]) -> bool:
 
     roots = {find(rid) for rid in room_ids}
     return len(roots) <= 1
+
+
+# ---------------------------------------------------------------------------
+# Attached bathroom: add/remove a bathroom carved from an existing room,
+# reusing the exact same strip-cut (`geo.split_strip`) already used for the
+# staircase/veranda strips above, and the same recompute/connectivity checks
+# manual room edits use -- so an attached bathroom gets real doors/walls and
+# the same "every room reachable" guarantee as everything else on the floor.
+# ---------------------------------------------------------------------------
+
+ATTACHED_BATHROOM_INELIGIBLE_TYPES = {
+    "bathroom", "accessible_bathroom", "staircase", "veranda", "foyer",
+    "balcony", "utility", "pooja_room", "kitchen",
+}
+
+
+def _cardinal_letters(zones: list[str]) -> set[str]:
+    letters: set[str] = set()
+    for zone in zones:
+        letters.update(zone)
+    return letters
+
+
+def _merge_adjacent_rects(a: dict, b: dict) -> dict | None:
+    """Union of two rects into one exact rectangle, if they share a full
+    common edge -- the inverse of `geo.split_strip`. Returns None if they no
+    longer tile cleanly (e.g. one side was manually resized afterward)."""
+    tol = 0.05
+    if abs(a["l"] - b["l"]) < tol and abs(a["y"] - b["y"]) < tol:
+        if abs((a["x"] + a["w"]) - b["x"]) < tol:
+            return {"x": a["x"], "y": a["y"], "w": a["w"] + b["w"], "l": a["l"]}
+        if abs((b["x"] + b["w"]) - a["x"]) < tol:
+            return {"x": b["x"], "y": a["y"], "w": a["w"] + b["w"], "l": a["l"]}
+    if abs(a["w"] - b["w"]) < tol and abs(a["x"] - b["x"]) < tol:
+        if abs((a["y"] + a["l"]) - b["y"]) < tol:
+            return {"x": a["x"], "y": a["y"], "w": a["w"], "l": a["l"] + b["l"]}
+        if abs((b["y"] + b["l"]) - a["y"]) < tol:
+            return {"x": a["x"], "y": b["y"], "w": a["w"], "l": a["l"] + b["l"]}
+    return None
+
+
+def add_attached_bathroom(floor: dict, room_id: str, facing: str, vastu: bool) -> tuple[dict, list[str]]:
+    """Carves a rectangular attached-bathroom strip off one edge of the given
+    room (in place on `floor`), picking whichever edge scores best (an
+    exterior wall for ventilation, a Vastu-preferred direction when enabled)
+    among every edge that leaves both the bathroom and the remaining room at
+    or above their minimum usable size, doesn't overlap another room, and
+    keeps every room on the floor reachable. Returns (new_room_dict,
+    warnings). Raises ValueError -- the caller turns this into a 400 -- if no
+    edge works, with a message explaining why."""
+    rooms_by_id = {r["id"]: r for r in floor["rooms"]}
+    room = rooms_by_id.get(room_id)
+    if room is None:
+        raise ValueError(f"Room '{room_id}' was not found on this floor.")
+    if room["type"] in ATTACHED_BATHROOM_INELIGIBLE_TYPES:
+        raise ValueError(f"A {room['label']} isn't a suitable room for an attached bathroom.")
+    if room.get("attached_bathroom_id"):
+        raise ValueError(f"{room['label']} already has an attached bathroom.")
+
+    bath_meta = ROOM_LIBRARY["bathroom"]
+    parent_meta = ROOM_LIBRARY[room["type"]]
+    outline = {"x": floor["outline"]["x"], "y": floor["outline"]["y"],
+               "w": floor["outline"]["width"], "l": floor["outline"]["length"]}
+    room_rect = {"x": room["x"], "y": room["y"], "w": room["width"], "l": room["length"]}
+    room_boundary_sides = geo.on_boundary(room_rect, outline)
+    other_rects = [
+        {"x": o["x"], "y": o["y"], "w": o["width"], "l": o["length"]}
+        for o in floor["rooms"] if o["id"] != room_id
+    ]
+    vastu_letters = _cardinal_letters(bath_meta["zones"]) if vastu else set()
+
+    # Every edge that leaves both pieces at/above their minimum usable size
+    # and doesn't overlap another room, scored by exterior-wall access (for a
+    # window) and Vastu direction preference.
+    candidates: list[tuple[float, str, dict, dict]] = []
+    for side in ("south", "east", "north", "west"):
+        depth_axis_size = room_rect["l"] if side in ("north", "south") else room_rect["w"]
+        default_depth = bath_meta["min_l"] if side in ("north", "south") else bath_meta["min_w"]
+        depth = min(default_depth, depth_axis_size * 0.45)
+        if depth <= 0.1:
+            continue
+        bath_rect, rest_rect = geo.split_strip(room_rect, side, depth)
+        if bath_rect["w"] < bath_meta["min_w"] - 0.25 or bath_rect["l"] < bath_meta["min_l"] - 0.25:
+            continue
+        if rest_rect["w"] < parent_meta["min_w"] - 0.25 or rest_rect["l"] < parent_meta["min_l"] - 0.25:
+            continue
+        if any(geo.rects_overlap(bath_rect, o, tolerance=0.05) for o in other_rects):
+            continue
+        score = 0.0
+        if side in room_boundary_sides:
+            score += 2.0
+        if vastu and side in vastu_letters:
+            score += 1.5
+        candidates.append((score, side, bath_rect, rest_rect))
+
+    if not candidates:
+        raise ValueError(
+            f"{room['label']} is too small to fit an attached bathroom without shrinking either room below its "
+            f"minimum usable size."
+        )
+    candidates.sort(key=lambda c: -c[0])
+
+    new_id = f"bathroom_attached_{room_id}"
+    for _score, side, bath_rect, rest_rect in candidates:
+        # Try the cut on a scratch copy first -- only commit it to the real
+        # floor once we've confirmed (via the same recompute + connectivity
+        # check a manual room edit gets) that it doesn't strand any room.
+        trial_rooms = [dict(r) for r in floor["rooms"]]
+        trial_room = next(r for r in trial_rooms if r["id"] == room_id)
+        trial_room["x"], trial_room["y"] = round(rest_rect["x"], 2), round(rest_rect["y"], 2)
+        trial_room["width"], trial_room["length"] = round(rest_rect["w"], 2), round(rest_rect["l"], 2)
+        trial_room["furniture"] = []
+        trial_room["attached_bathroom_id"] = new_id
+
+        bath_instance = RoomInstance(
+            room_id=new_id, room_type="bathroom", label="Attached Bathroom", weight=0, priority=0,
+            zones=[], habitable=False, min_w=bath_meta["min_w"], min_l=bath_meta["min_l"],
+            furniture=[dict(item) for item in bath_meta["furniture"]], floor_index=0, rect=bath_rect,
+        )
+        new_room = {
+            "id": new_id, "type": "bathroom", "label": "Attached Bathroom", "zone": room.get("zone"),
+            "x": round(bath_rect["x"], 2), "y": round(bath_rect["y"], 2),
+            "width": round(bath_rect["w"], 2), "length": round(bath_rect["l"], 2),
+            "area": round(geo.rect_area(bath_rect), 2), "below_min_size": False,
+            "furniture": _place_furniture(bath_instance), "attached_to": room_id,
+        }
+        trial_rooms.append(new_room)
+        trial_floor = {"outline": floor["outline"], "rooms": trial_rooms, "doors": floor["doors"]}
+        recompute_floor_geometry(trial_floor, facing)
+        if not rooms_are_connected([r["id"] for r in trial_rooms], trial_floor["doors"]):
+            continue
+
+        floor["rooms"] = trial_rooms
+        floor["doors"] = trial_floor["doors"]
+        floor["windows"] = trial_floor["windows"]
+        floor["walls"] = trial_floor["walls"]
+
+        warnings: list[str] = []
+        if side in geo.on_boundary(bath_rect, outline):
+            seg = geo.edges_of(bath_rect)[side]
+            vent_width = round(min(WINDOW_WIDTH_DEFAULT, max(geo.segment_length(seg) * 0.4, 1.5)), 2)
+            cx, cy = geo.midpoint(seg)
+            floor["windows"].append({
+                "room_id": new_id, "wall": side, "width": vent_width,
+                "center_x": round(cx, 2), "center_y": round(cy, 2),
+            })
+            new_room["has_window"] = True
+        else:
+            new_room["has_window"] = False
+            warnings.append(
+                f"Attached Bathroom for {room['label']} doesn't reach an exterior wall, so it has no window -- "
+                f"plan for a mechanical exhaust fan for ventilation instead."
+            )
+        return new_room, warnings
+
+    raise ValueError(
+        f"Adding an attached bathroom to {room['label']} would cut off part of the house from the rest -- try a "
+        f"different room."
+    )
+
+
+def remove_attached_bathroom(floor: dict, room_id: str, facing: str) -> list[str]:
+    """Removes `room_id`'s attached bathroom (in place on `floor`) and, where
+    the two rects still tile cleanly, merges its space back into the room --
+    the exact inverse of `add_attached_bathroom`'s strip cut. Raises
+    ValueError if the room doesn't have an attached bathroom."""
+    rooms_by_id = {r["id"]: r for r in floor["rooms"]}
+    room = rooms_by_id.get(room_id)
+    if room is None:
+        raise ValueError(f"Room '{room_id}' was not found on this floor.")
+    bath_id = room.get("attached_bathroom_id")
+    bath = rooms_by_id.get(bath_id) if bath_id else None
+    if not bath:
+        raise ValueError(f"{room['label']} does not have an attached bathroom.")
+
+    room_rect = {"x": room["x"], "y": room["y"], "w": room["width"], "l": room["length"]}
+    bath_rect = {"x": bath["x"], "y": bath["y"], "w": bath["width"], "l": bath["length"]}
+    merged = _merge_adjacent_rects(room_rect, bath_rect)
+
+    warnings: list[str] = []
+    if merged is not None:
+        room["x"], room["y"] = round(merged["x"], 2), round(merged["y"], 2)
+        room["width"], room["length"] = round(merged["w"], 2), round(merged["l"], 2)
+        room["furniture"] = []
+    else:
+        warnings.append(
+            f"Removed the attached bathroom, but its space couldn't be automatically returned to {room['label']} "
+            f"because the rooms had been resized since it was added -- drag {room['label']}'s edge in the room "
+            f"layout editor to reclaim the space."
+        )
+    room.pop("attached_bathroom_id", None)
+    floor["rooms"] = [r for r in floor["rooms"] if r["id"] != bath_id]
+    recompute_floor_geometry(floor, facing)
+    if not rooms_are_connected([r["id"] for r in floor["rooms"]], floor["doors"]):
+        warnings.append(
+            "Removing this bathroom left one or more rooms unreachable -- you may need to adjust the layout."
+        )
+    return warnings

@@ -90,6 +90,72 @@
   position: relative;
 }
 
+.view-mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--surface-line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.view-mode-btn {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.78rem;
+  border-radius: 0 !important;
+  border: none !important;
+}
+.view-mode-btn + .view-mode-btn {
+  border-left: 1px solid var(--surface-line) !important;
+}
+.view-mode-btn.is-active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.show-furniture-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.drawing-3d-outer {
+  position: relative;
+}
+.drawing-3d-wrap {
+  width: 100%;
+  aspect-ratio: 4 / 3.4;
+  max-height: 78vh;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #f2f0ea;
+}
+.drawing-3d-wrap canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.drawing-3d-toggles {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.drawing-3d-roof-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid var(--surface-line);
+  border-radius: 4px;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
 .drawing-svg-wrap svg {
   width: 100%;
   height: 100%;
@@ -217,6 +283,54 @@
   stroke-width: 0.1;
   cursor: nwse-resize;
 }
+.room-edit-handle-nwse {
+  cursor: nwse-resize;
+}
+.room-edit-handle-nesw {
+  cursor: nesw-resize;
+}
+
+.furniture-resize-handle {
+  fill: var(--warm);
+  stroke: var(--paper);
+  stroke-width: 0.08;
+  cursor: nwse-resize;
+}
+.furniture-resize-handle:hover,
+.furniture-resize-handle.is-dragging {
+  fill: var(--accent);
+}
+
+.wall-edit-handle {
+  stroke: var(--accent);
+  stroke-width: 0.35;
+  stroke-linecap: round;
+  cursor: ew-resize;
+}
+.wall-edit-handle-y {
+  cursor: ns-resize;
+}
+.wall-edit-handle:hover,
+.wall-edit-handle.is-dragging {
+  stroke-width: 0.55;
+  filter: brightness(1.2);
+}
+
+.parking-edit-rect {
+  fill: var(--warm-soft);
+  fill-opacity: 0.35;
+  stroke: var(--warm);
+  stroke-width: 0.15;
+  stroke-dasharray: 0.6 0.4;
+  cursor: grab;
+}
+.parking-editable:hover .parking-edit-rect {
+  fill-opacity: 0.5;
+}
+.parking-editable.is-dragging .parking-edit-rect {
+  cursor: grabbing;
+  fill-opacity: 0.6;
+}
 
 .furniture-editor {
   padding: 1rem 1rem 1.1rem;
@@ -273,18 +387,70 @@
   color: var(--ink);
   border-color: var(--ink-soft);
 }
-.furniture-add-row {
+.furniture-catalog {
   display: flex;
-  gap: 0.5rem;
+  flex-direction: column;
+  gap: 0.7rem;
 }
-.furniture-add-row select {
-  flex: 1;
-  padding: 0.45rem 0.5rem;
+.furniture-catalog-section + .furniture-catalog-section {
+  margin-top: 0.7rem;
+}
+.furniture-catalog-heading {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin-bottom: 0.4rem;
+}
+.furniture-catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(4.6rem, 1fr));
+  gap: 0.4rem;
+}
+.furniture-catalog-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.5rem 0.35rem 0.4rem;
   border: 1px solid var(--surface-line);
-  border-radius: 3px;
+  border-radius: 4px;
   background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 0.68rem;
+  line-height: 1.15;
+  text-align: center;
+  cursor: pointer;
+}
+.furniture-catalog-btn:hover {
+  border-color: var(--accent);
   color: var(--ink);
-  font-size: 0.85rem;
+  background: var(--accent-soft);
+}
+.furniture-catalog-icon {
+  width: 1.9rem;
+  height: 1.9rem;
+}
+.furniture-catalog-more {
+  border-top: 1px solid var(--surface-line);
+  padding-top: 0.6rem;
+}
+.furniture-catalog-more summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  margin-bottom: 0.5rem;
+}
+.furniture-catalog-more summary:hover {
+  color: var(--ink);
+}
+.furniture-catalog-more[open] summary {
+  margin-bottom: 0.7rem;
 }
 .furniture-hint {
   margin-top: 0.7rem;
@@ -363,4 +529,43 @@ table.schedule .zone {
   font-family: var(--font-mono);
   font-size: 0.8rem;
   font-variant-numeric: tabular-nums;
+}
+
+.notice-banner {
+  background: var(--warm-soft);
+  color: var(--warm);
+  border: 1px solid var(--warm);
+  border-radius: 3px;
+  padding: 0.6rem 0.85rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  margin-bottom: 0.7rem;
+}
+
+.attached-bath-cell {
+  text-align: right;
+  white-space: nowrap;
+}
+.attached-bath-btn {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.02em;
+  padding: 0.22rem 0.5rem;
+  border-radius: 3px;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  cursor: pointer;
+}
+.attached-bath-btn:hover {
+  filter: brightness(0.97);
+}
+.attached-bath-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.attached-bath-btn.is-remove {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
 }

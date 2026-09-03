@@ -3,6 +3,7 @@ import { api, ApiError } from "../api/client";
 import type { CompoundWallStyle, FloorData, FurnitureItem, GateStyle, PlanData, RoomData } from "../api/types";
 import { furnitureIconMarkup } from "./furnitureIcons";
 import { bikeIconMarkup, carIconMarkup, shrubIconMarkup, treeIconMarkup } from "./siteIcons";
+import FloorPlan3DView from "./FloorPlan3DView";
 import "./floor-plan-viewer.css";
 
 const FURNITURE_CATALOG: { type: string; label: string; w: number; l: number }[] = [
@@ -30,9 +31,53 @@ const FURNITURE_CATALOG: { type: string; label: string; w: number; l: number }[]
   { type: "planters", label: "Planters", w: 2, l: 2 },
 ];
 
+/** Curated furniture suggestions per room type -- shown first (and by
+ * default selected) in the "Add" picker so a living room offers sofa/TV/
+ * teapoy/planters instead of the full 21-item catalog. Any type not listed
+ * here still falls back to the full catalog. */
+const ROOM_FURNITURE_CATALOG: Record<string, string[]> = {
+  living_room: ["sofa_set", "center_table", "tv_unit", "chair", "planters"],
+  dining_room: ["dining_table_6", "chair", "planters"],
+  kitchen: ["l_shape_counter", "sink", "stove", "refrigerator", "washing_machine"],
+  master_bedroom: ["bed_king", "wardrobe", "dresser", "tv_unit", "chair"],
+  bedroom: ["bed_queen", "bed_single", "wardrobe", "dresser", "study_table"],
+  guest_room: ["bed_queen", "wardrobe", "dresser"],
+  bathroom: ["wc", "wash_basin", "shower"],
+  accessible_bathroom: ["wc", "wash_basin", "shower"],
+  utility: ["washing_machine", "sink"],
+  pooja_room: ["mandir_unit"],
+  study_room: ["study_table", "chair", "bookshelf"],
+  home_office: ["study_table", "chair", "bookshelf"],
+  library: ["bookshelf", "study_table", "chair"],
+  foyer: ["planters", "chair"],
+  veranda: ["planters", "chair"],
+  servant_room: ["bed_single", "wardrobe"],
+  store_room: ["wardrobe", "bookshelf"],
+};
+
+/** Full catalog, partitioned into named categories for the "More furniture"
+ * browser -- every item belongs to exactly one category here regardless of
+ * which rooms suggest it in ROOM_FURNITURE_CATALOG above. */
+const CATALOG_CATEGORIES: { label: string; types: string[] }[] = [
+  { label: "Living & Dining", types: ["sofa_set", "center_table", "tv_unit", "dining_table_6"] },
+  { label: "Bedroom", types: ["bed_king", "bed_queen", "bed_single", "wardrobe", "dresser"] },
+  { label: "Study & Storage", types: ["study_table", "chair", "bookshelf"] },
+  { label: "Kitchen", types: ["l_shape_counter", "sink", "stove", "refrigerator", "washing_machine"] },
+  { label: "Bathroom", types: ["wc", "wash_basin", "shower"] },
+  { label: "Pooja & Outdoor", types: ["mandir_unit", "planters"] },
+];
+
 function furnitureLabel(type: string): string {
   return FURNITURE_CATALOG.find((f) => f.type === type)?.label ?? type.replace(/_/g, " ");
 }
+
+/** Mirrors the backend's `ATTACHED_BATHROOM_INELIGIBLE_TYPES` so the "Add
+ * attached bathroom" button doesn't even appear for a room the server would
+ * always reject anyway. */
+const ATTACHED_BATHROOM_INELIGIBLE_TYPES = new Set([
+  "bathroom", "accessible_bathroom", "staircase", "veranda", "foyer",
+  "balcony", "utility", "pooja_room", "kitchen",
+]);
 
 interface RoomRect {
   x: number;
@@ -41,13 +86,107 @@ interface RoomRect {
   length: number;
 }
 
+type RoomResizeCorner = "resize-tl" | "resize-tr" | "resize-bl" | "resize-br";
+
 interface RoomDragState {
   roomId: string;
+  mode: "move" | RoomResizeCorner;
+  startX: number;
+  startY: number;
+  orig: RoomRect;
+  /** Snapshot of every other room's rect at drag start, used to stop a
+   * resize from growing into a neighbor (which would leave the layout with
+   * overlapping rooms and no valid shared wall for a doorway). */
+  others: RoomRect[];
+}
+
+const NEIGHBOR_TOUCH_TOL = 0.05;
+
+function overlaps1d(aMin: number, aMax: number, bMin: number, bMax: number): boolean {
+  return aMin < bMax - 1e-6 && aMax > bMin + 1e-6;
+}
+
+/** Furthest a room's right edge may grow to (x + width) without crossing a
+ * neighbor that currently sits at or beyond its right edge and overlaps it
+ * vertically. Falls back to `bound` (the outline edge) if nothing is closer. */
+function maxRightEdge(others: RoomRect[], room: RoomRect, bound: number): number {
+  let limit = bound;
+  for (const o of others) {
+    if (!overlaps1d(o.y, o.y + o.length, room.y, room.y + room.length)) continue;
+    if (o.x >= room.x + room.width - NEIGHBOR_TOUCH_TOL) limit = Math.min(limit, o.x);
+  }
+  return limit;
+}
+
+/** Furthest left a room's left edge may shrink to (x) without crossing a
+ * neighbor to its left. Falls back to `bound` (the outline edge). */
+function minLeftEdge(others: RoomRect[], room: RoomRect, bound: number): number {
+  let limit = bound;
+  for (const o of others) {
+    if (!overlaps1d(o.y, o.y + o.length, room.y, room.y + room.length)) continue;
+    if (o.x + o.width <= room.x + NEIGHBOR_TOUCH_TOL) limit = Math.max(limit, o.x + o.width);
+  }
+  return limit;
+}
+
+/** Furthest a room's bottom edge may grow to (y + length) without crossing a
+ * neighbor below it. Falls back to `bound` (the outline edge). */
+function maxBottomEdge(others: RoomRect[], room: RoomRect, bound: number): number {
+  let limit = bound;
+  for (const o of others) {
+    if (!overlaps1d(o.x, o.x + o.width, room.x, room.x + room.width)) continue;
+    if (o.y >= room.y + room.length - NEIGHBOR_TOUCH_TOL) limit = Math.min(limit, o.y);
+  }
+  return limit;
+}
+
+/** Furthest up a room's top edge may shrink to (y) without crossing a
+ * neighbor above it. Falls back to `bound` (the outline edge). */
+function minTopEdge(others: RoomRect[], room: RoomRect, bound: number): number {
+  let limit = bound;
+  for (const o of others) {
+    if (!overlaps1d(o.x, o.x + o.width, room.x, room.x + room.width)) continue;
+    if (o.y + o.length <= room.y + NEIGHBOR_TOUCH_TOL) limit = Math.max(limit, o.y + o.length);
+  }
+  return limit;
+}
+
+interface FurnitureResizeState {
+  roomId: string;
+  idx: number;
+  orig: FurnitureItem;
+}
+
+const MIN_FURNITURE_SIZE = 0.5;
+
+interface SharedWallHandle {
+  /** `group1` is always on the west (axis "x") or north (axis "y") side. */
+  group1: string[];
+  group2: string[];
+  axis: "x" | "y";
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+interface WallDragState {
+  axis: "x" | "y";
+  group1: string[];
+  group2: string[];
+  start: number;
+  orig: Record<string, RoomRect>;
+}
+
+interface ParkingDragState {
   mode: "move" | "resize";
   startX: number;
   startY: number;
   orig: RoomRect;
 }
+
+const WALL_MATCH_TOL = 0.05;
+const MIN_PARKING_SIZE = 3;
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -123,7 +262,9 @@ function buildFloorSvg(
   plotWidth: number,
   wallStyle: CompoundWallStyle,
   gateStyle: GateStyle,
-  excludeFurnitureRoomId: string | null = null
+  excludeFurnitureRoomId: string | null = null,
+  showFurniture: boolean = true,
+  furnitureOverride?: Record<string, FurnitureItem[]>
 ): { svg: string; viewBox: string } {
   const roomsById = Object.fromEntries(floor.rooms.map((r) => [r.id, r]));
   const isGroundFloor = floor.floor_number === 0;
@@ -352,8 +493,9 @@ function buildFloorSvg(
     if (r.type === "staircase") {
       svg += `<g transform="translate(${r.x} ${r.y}) scale(${r.width} ${r.length})" stroke-width="${unit * 0.04}">${furnitureIconMarkup("staircase")}</g>`;
     }
-    if (r.id !== excludeFurnitureRoomId) {
-      for (const it of r.furniture ?? []) {
+    if (showFurniture && r.id !== excludeFurnitureRoomId) {
+      const furnitureList = furnitureOverride && r.id in furnitureOverride ? furnitureOverride[r.id] : r.furniture ?? [];
+      for (const it of furnitureList) {
         svg += `<g transform="${furnitureTransform(it)}" stroke-width="${unit * 0.05}">${furnitureIconMarkup(it.type)}</g>`;
       }
     }
@@ -560,6 +702,8 @@ export default function FloorPlanViewer({
 }) {
   const [activeFloorIdx, setActiveFloorIdx] = useState(0);
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"2d" | "3d">("2d");
+  const [show2DFurniture, setShow2DFurniture] = useState(true);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; room: RoomData } | null>(null);
   const [downloading, setDownloading] = useState<null | "png" | "pdf">(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -569,27 +713,65 @@ export default function FloorPlanViewer({
   const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
   const [localFurniture, setLocalFurniture] = useState<Record<string, FurnitureItem[]>>({});
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
-  const [addType, setAddType] = useState(FURNITURE_CATALOG[0].type);
+  const [furnitureResize, setFurnitureResize] = useState<FurnitureResizeState | null>(null);
   const [savingFurniture, setSavingFurniture] = useState(false);
   const [furnitureError, setFurnitureError] = useState<string | null>(null);
   const dragOffsetRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
+  const draggedItemRef = useRef<FurnitureItem | null>(null);
 
   const [editingRoomsFloorIdx, setEditingRoomsFloorIdx] = useState<number | null>(null);
   const [localRooms, setLocalRooms] = useState<Record<string, RoomRect>>({});
   const [roomDrag, setRoomDrag] = useState<RoomDragState | null>(null);
+  const [wallDrag, setWallDrag] = useState<WallDragState | null>(null);
+  const [localParking, setLocalParking] = useState<RoomRect | null>(null);
+  const [parkingDrag, setParkingDrag] = useState<ParkingDragState | null>(null);
   const [savingRooms, setSavingRooms] = useState(false);
   const [roomEditError, setRoomEditError] = useState<string | null>(null);
+
+  const [attachedBathroomBusy, setAttachedBathroomBusy] = useState<string | null>(null);
+  const [attachedBathroomError, setAttachedBathroomError] = useState<string | null>(null);
+  const [attachedBathroomNotice, setAttachedBathroomNotice] = useState<string | null>(null);
 
   const floor = plan.floors[activeFloorIdx];
   const isEditingThisFloor = editingFloorIdx === activeFloorIdx;
   const wallStyle = plan.meta.compound_wall_style ?? "wall";
   const gateStyle = plan.meta.gate_style ?? "swing";
   const { svg, viewBox } = useMemo(
-    () => buildFloorSvg(floor, plan.meta.plot_length, plan.meta.plot_width, wallStyle, gateStyle, isEditingThisFloor ? editingRoomId : null),
-    [floor, plan.meta.plot_length, plan.meta.plot_width, wallStyle, gateStyle, isEditingThisFloor, editingRoomId]
+    () =>
+      buildFloorSvg(
+        floor,
+        plan.meta.plot_length,
+        plan.meta.plot_width,
+        wallStyle,
+        gateStyle,
+        isEditingThisFloor ? editingRoomId : null,
+        show2DFurniture,
+        isEditingThisFloor ? localFurniture : undefined
+      ),
+    [
+      floor,
+      plan.meta.plot_length,
+      plan.meta.plot_width,
+      wallStyle,
+      gateStyle,
+      isEditingThisFloor,
+      editingRoomId,
+      show2DFurniture,
+      localFurniture,
+    ]
   );
   const rows = useMemo(() => [...floor.rooms].sort((a, b) => b.area - a.area), [floor]);
   const totalArea = useMemo(() => rows.reduce((s, r) => s + r.area, 0), [rows]);
+
+  const editingRoomType = editingRoomId ? floor.rooms.find((r) => r.id === editingRoomId)?.type : undefined;
+  const curatedFurnitureTypes = editingRoomType ? ROOM_FURNITURE_CATALOG[editingRoomType] : undefined;
+  const suggestedFurniture = curatedFurnitureTypes
+    ? FURNITURE_CATALOG.filter((f) => curatedFurnitureTypes.includes(f.type))
+    : [];
+  const otherCategories = CATALOG_CATEGORIES.map((cat) => ({
+    label: cat.label,
+    items: FURNITURE_CATALOG.filter((f) => cat.types.includes(f.type) && !curatedFurnitureTypes?.includes(f.type)),
+  })).filter((cat) => cat.items.length > 0);
 
   function findRoomIdFromEvent(e: React.MouseEvent): string | null {
     const target = e.target as SVGElement;
@@ -653,30 +835,73 @@ export default function FloorPlanViewer({
     if (!item) return;
     const p = screenToSvgPoint(e.clientX, e.clientY);
     dragOffsetRef.current = { dx: p.x - item.x, dy: p.y - item.y };
+    draggedItemRef.current = { ...item };
     setDraggingIdx(idx);
   }
 
+  // While dragging, the item is free to move over any room (clamped to
+  // whichever room is currently under the cursor, not just its own) but
+  // stays in its origin room's array so the sidebar list doesn't jump mid-drag;
+  // on drop, if it ended up centered over a different room, it's reassigned
+  // there -- this is how a piece of furniture moves between rooms.
   useEffect(() => {
     if (draggingIdx === null || !editingRoomId) return;
-    const room = floor.rooms.find((r) => r.id === editingRoomId);
-    if (!room) return;
+    const originRoomId = editingRoomId;
+    const originRoom = floor.rooms.find((r) => r.id === originRoomId);
+    if (!originRoom) return;
+
+    function roomAt(x: number, y: number) {
+      return floor.rooms.find((r) => x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.length) ?? null;
+    }
 
     function handleMove(e: MouseEvent) {
       const p = screenToSvgPoint(e.clientX, e.clientY);
+      const dragged = draggedItemRef.current;
+      if (!dragged) return;
+      const bounds = roomAt(p.x, p.y) ?? originRoom!;
+      const maxX = Math.max(bounds.x + bounds.width - dragged.w, bounds.x);
+      const maxY = Math.max(bounds.y + bounds.length - dragged.l, bounds.y);
+      const nx = round2(Math.min(Math.max(p.x - dragOffsetRef.current.dx, bounds.x), maxX));
+      const ny = round2(Math.min(Math.max(p.y - dragOffsetRef.current.dy, bounds.y), maxY));
+      draggedItemRef.current = { ...dragged, x: nx, y: ny };
       setLocalFurniture((prev) => {
-        const items = prev[editingRoomId!] ?? [];
-        const item = items[draggingIdx!];
-        if (!item || !room) return prev;
-        const maxX = Math.max(room.x + room.width - item.w, room.x);
-        const maxY = Math.max(room.y + room.length - item.l, room.y);
-        const nx = Math.min(Math.max(p.x - dragOffsetRef.current.dx, room.x), maxX);
-        const ny = Math.min(Math.max(p.y - dragOffsetRef.current.dy, room.y), maxY);
-        const updated = [...items];
-        updated[draggingIdx!] = { ...item, x: round2(nx), y: round2(ny) };
-        return { ...prev, [editingRoomId!]: updated };
+        const items = [...(prev[originRoomId] ?? [])];
+        if (!items[draggingIdx!]) return prev;
+        items[draggingIdx!] = { ...items[draggingIdx!], x: nx, y: ny };
+        return { ...prev, [originRoomId]: items };
       });
     }
+
     function handleUp() {
+      const dragged = draggedItemRef.current;
+      if (dragged) {
+        const cx = dragged.x + dragged.w / 2;
+        const cy = dragged.y + dragged.l / 2;
+        const destRoom = floor.rooms.find(
+          (r) => r.id !== originRoomId && cx >= r.x && cx <= r.x + r.width && cy >= r.y && cy <= r.y + r.length
+        );
+        if (destRoom) {
+          setLocalFurniture((prev) => {
+            const originItems = [...(prev[originRoomId] ?? [])];
+            const [moved] = originItems.splice(draggingIdx!, 1);
+            if (!moved) return prev;
+            const maxX = Math.max(destRoom.x + destRoom.width - moved.w, destRoom.x);
+            const maxY = Math.max(destRoom.y + destRoom.length - moved.l, destRoom.y);
+            const placed = {
+              ...moved,
+              x: round2(Math.min(Math.max(moved.x, destRoom.x), maxX)),
+              y: round2(Math.min(Math.max(moved.y, destRoom.y), maxY)),
+            };
+            return {
+              ...prev,
+              [originRoomId]: originItems,
+              [destRoom.id]: [...(prev[destRoom.id] ?? []), placed],
+            };
+          });
+          setEditingRoomId(destRoom.id);
+        }
+      }
+      draggedItemRef.current = null;
       setDraggingIdx(null);
     }
     window.addEventListener("mousemove", handleMove);
@@ -687,6 +912,48 @@ export default function FloorPlanViewer({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draggingIdx, editingRoomId, floor]);
+
+  function startFurnitureResize(e: React.MouseEvent, roomId: string, idx: number) {
+    e.stopPropagation();
+    e.preventDefault();
+    const item = localFurniture[roomId]?.[idx];
+    if (!item) return;
+    setFurnitureResize({ roomId, idx, orig: { ...item } });
+  }
+
+  // Resize handle sits at the item's (unrotated) bottom-right corner, same
+  // convention as room resizing -- it grows/shrinks toward that corner and
+  // is clamped so the item can never exceed its room's bounds.
+  useEffect(() => {
+    if (!furnitureResize) return;
+    const { roomId, idx, orig } = furnitureResize;
+    const room = floor.rooms.find((r) => r.id === roomId);
+    if (!room) return;
+
+    function handleMove(e: MouseEvent) {
+      const p = screenToSvgPoint(e.clientX, e.clientY);
+      const maxW = room!.x + room!.width - orig.x;
+      const maxL = room!.y + room!.length - orig.y;
+      const w = round2(Math.min(Math.max(p.x - orig.x, MIN_FURNITURE_SIZE), Math.max(maxW, MIN_FURNITURE_SIZE)));
+      const l = round2(Math.min(Math.max(p.y - orig.y, MIN_FURNITURE_SIZE), Math.max(maxL, MIN_FURNITURE_SIZE)));
+      setLocalFurniture((prev) => {
+        const items = [...(prev[roomId] ?? [])];
+        if (!items[idx]) return prev;
+        items[idx] = { ...items[idx], w, l };
+        return { ...prev, [roomId]: items };
+      });
+    }
+    function handleUp() {
+      setFurnitureResize(null);
+    }
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [furnitureResize, floor]);
 
   function addFurniture(roomId: string, catalogType: string) {
     const room = floor.rooms.find((r) => r.id === roomId);
@@ -747,6 +1014,24 @@ export default function FloorPlanViewer({
     }
   }
 
+  async function toggleAttachedBathroom(room: RoomData) {
+    if (!editable || attachedBathroomBusy) return;
+    setAttachedBathroomBusy(room.id);
+    setAttachedBathroomError(null);
+    setAttachedBathroomNotice(null);
+    try {
+      const result = room.attached_bathroom_id
+        ? await api.removeAttachedBathroom(projectId!, floorPlanId!, room.id, floor.floor_number)
+        : await api.addAttachedBathroom(projectId!, floorPlanId!, room.id, floor.floor_number);
+      onFurnitureSaved?.(result.floor_plan.plan_data);
+      if (result.warnings.length > 0) setAttachedBathroomNotice(result.warnings.join(" "));
+    } catch (err) {
+      setAttachedBathroomError(err instanceof ApiError ? err.message : "Could not update attached bathroom");
+    } finally {
+      setAttachedBathroomBusy(null);
+    }
+  }
+
   const isEditingRoomsThisFloor = editingRoomsFloorIdx === activeFloorIdx;
   const MIN_ROOM_SIZE = 3;
 
@@ -756,6 +1041,11 @@ export default function FloorPlanViewer({
       if (r.type !== "staircase") init[r.id] = { x: r.x, y: r.y, width: r.width, length: r.length };
     }
     setLocalRooms(init);
+    setLocalParking(
+      floor.parking
+        ? { x: floor.parking.x, y: floor.parking.y, width: floor.parking.width, length: floor.parking.length }
+        : null
+    );
     setEditingRoomsFloorIdx(activeFloorIdx);
     setRoomEditError(null);
   }
@@ -763,17 +1053,22 @@ export default function FloorPlanViewer({
   function cancelEditRooms() {
     setEditingRoomsFloorIdx(null);
     setLocalRooms({});
+    setLocalParking(null);
     setRoomDrag(null);
+    setParkingDrag(null);
     setRoomEditError(null);
   }
 
-  function startRoomDrag(e: React.MouseEvent, roomId: string, mode: "move" | "resize") {
+  function startRoomDrag(e: React.MouseEvent, roomId: string, mode: "move" | RoomResizeCorner) {
     e.stopPropagation();
     e.preventDefault();
     const rect = localRooms[roomId];
     if (!rect) return;
     const p = screenToSvgPoint(e.clientX, e.clientY);
-    setRoomDrag({ roomId, mode, startX: p.x, startY: p.y, orig: rect });
+    const others = Object.entries(localRooms)
+      .filter(([id]) => id !== roomId)
+      .map(([, r]) => r);
+    setRoomDrag({ roomId, mode, startX: p.x, startY: p.y, orig: rect, others });
   }
 
   useEffect(() => {
@@ -791,21 +1086,83 @@ export default function FloorPlanViewer({
       if (drag.mode === "move") {
         const maxX = outline.x + outline.width - orig.width;
         const maxY = outline.y + outline.length - orig.length;
+        // Same neighbor clamp as resize -- otherwise a straight move can slide
+        // the room's rect on top of another one instead of stopping at it.
+        const minXBound = Math.max(outline.x, minLeftEdge(drag.others, orig, outline.x));
+        const maxXBound = Math.min(maxX, maxRightEdge(drag.others, orig, outline.x + outline.width) - orig.width);
+        const minYBound = Math.max(outline.y, minTopEdge(drag.others, orig, outline.y));
+        const maxYBound = Math.min(maxY, maxBottomEdge(drag.others, orig, outline.y + outline.length) - orig.length);
         next = {
-          x: Math.min(Math.max(orig.x + dx, outline.x), Math.max(maxX, outline.x)),
-          y: Math.min(Math.max(orig.y + dy, outline.y), Math.max(maxY, outline.y)),
+          x: Math.min(Math.max(orig.x + dx, minXBound), Math.max(maxXBound, minXBound)),
+          y: Math.min(Math.max(orig.y + dy, minYBound), Math.max(maxYBound, minYBound)),
           width: orig.width,
           length: orig.length,
         };
       } else {
-        const maxWidth = outline.x + outline.width - orig.x;
-        const maxLength = outline.y + outline.length - orig.y;
-        next = {
-          x: orig.x,
-          y: orig.y,
-          width: Math.min(Math.max(orig.width + dx, MIN_ROOM_SIZE), maxWidth),
-          length: Math.min(Math.max(orig.length + dy, MIN_ROOM_SIZE), maxLength),
-        };
+        // Each corner drags its own two edges while the opposite corner stays
+        // anchored -- e.g. the top-left handle moves x/y and shrinks/grows
+        // width/length toward the fixed bottom-right corner.
+        const isLeft = drag.mode === "resize-tl" || drag.mode === "resize-bl";
+        const isTop = drag.mode === "resize-tl" || drag.mode === "resize-tr";
+
+        // A corner drag changes both axes at once, so the vertical clamp
+        // needs to know where the horizontal edges are about to land (and
+        // vice versa) -- otherwise a neighbor that only starts overlapping
+        // because of the OTHER axis's growth slips through unclamped. Work
+        // out each axis's naive post-drag span first (bounded only by the
+        // outline and min size, not by neighbors) purely to feed the OTHER
+        // axis's neighbor check below.
+        const tentativeX = isLeft
+          ? Math.min(Math.max(orig.x + dx, outline.x), orig.x + orig.width - MIN_ROOM_SIZE)
+          : orig.x;
+        const tentativeWidth = isLeft
+          ? orig.x + orig.width - tentativeX
+          : Math.min(Math.max(orig.width + dx, MIN_ROOM_SIZE), outline.x + outline.width - orig.x);
+        const tentativeY = isTop
+          ? Math.min(Math.max(orig.y + dy, outline.y), orig.y + orig.length - MIN_ROOM_SIZE)
+          : orig.y;
+        const tentativeLength = isTop
+          ? orig.y + orig.length - tentativeY
+          : Math.min(Math.max(orig.length + dy, MIN_ROOM_SIZE), outline.y + outline.length - orig.y);
+        // The neighbor helpers use room.x/width to decide WHICH neighbors
+        // count as "to my side" (a stable reference point) and room.y/length
+        // only to test perpendicular overlap, or vice versa. Feeding them
+        // the tentative value on BOTH axes is wrong: once the naive tentative
+        // width already reaches past a neighbor, that neighbor's left edge
+        // looks "behind" the (already-inflated) right edge and gets excluded
+        // from the check entirely, silently removing the very clamp meant to
+        // stop it. So keep the driven axis's own position/size at its
+        // pre-drag (orig) value -- only the CROSS axis, which the neighbor
+        // check uses purely for overlap detection, should use the fresh
+        // tentative span.
+        const forHorizontal: RoomRect = { x: orig.x, y: tentativeY, width: orig.width, length: tentativeLength };
+        const forVertical: RoomRect = { x: tentativeX, y: orig.y, width: tentativeWidth, length: orig.length };
+
+        let x = orig.x;
+        let width: number;
+        if (isLeft) {
+          const rightEdge = orig.x + orig.width;
+          const minX = Math.max(outline.x, minLeftEdge(drag.others, forHorizontal, outline.x));
+          x = Math.min(Math.max(orig.x + dx, minX), rightEdge - MIN_ROOM_SIZE);
+          width = rightEdge - x;
+        } else {
+          const maxRight = Math.min(outline.x + outline.width, maxRightEdge(drag.others, forHorizontal, outline.x + outline.width));
+          width = Math.min(Math.max(orig.width + dx, MIN_ROOM_SIZE), maxRight - orig.x);
+        }
+
+        let y = orig.y;
+        let length: number;
+        if (isTop) {
+          const bottomEdge = orig.y + orig.length;
+          const minY = Math.max(outline.y, minTopEdge(drag.others, forVertical, outline.y));
+          y = Math.min(Math.max(orig.y + dy, minY), bottomEdge - MIN_ROOM_SIZE);
+          length = bottomEdge - y;
+        } else {
+          const maxBottom = Math.min(outline.y + outline.length, maxBottomEdge(drag.others, forVertical, outline.y + outline.length));
+          length = Math.min(Math.max(orig.length + dy, MIN_ROOM_SIZE), maxBottom - orig.y);
+        }
+
+        next = { x, y, width, length };
       }
 
       setLocalRooms((prev) => ({
@@ -825,6 +1182,198 @@ export default function FloorPlanViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomDrag, floor]);
 
+  // A "clean cut" boundary: every room touching one side, stacked along the
+  // perpendicular axis, exactly tiles the same span as every room touching
+  // the other side, with no gaps -- e.g. a bedroom on one side facing both a
+  // dining room and a bathroom stacked on the other. Dragging it resizes
+  // every room on both sides at once (grow one side, shrink the other by the
+  // same amount) so they always stay touching with no gap or overlap,
+  // instead of the overlap error you'd get resizing just one room into its
+  // neighbor.
+  function tilesCleanly(ranges: [number, number][]): [number, number] | null {
+    if (ranges.length === 0) return null;
+    const sorted = [...ranges].sort((a, b) => a[0] - b[0]);
+    for (let i = 1; i < sorted.length; i++) {
+      if (Math.abs(sorted[i][0] - sorted[i - 1][1]) > WALL_MATCH_TOL) return null;
+    }
+    return [sorted[0][0], sorted[sorted.length - 1][1]];
+  }
+
+  const sharedWalls = useMemo<SharedWallHandle[]>(() => {
+    if (!isEditingRoomsThisFloor) return [];
+    const ids = Object.keys(localRooms);
+    const walls: SharedWallHandle[] = [];
+    const seen = new Set<string>();
+
+    function addWall(axis: "x" | "y", coord: number, group1: string[], group2: string[]) {
+      if (group1.length === 0 || group2.length === 0) return;
+      const span1 = tilesCleanly(
+        group1.map((id): [number, number] =>
+          axis === "x"
+            ? [localRooms[id].y, localRooms[id].y + localRooms[id].length]
+            : [localRooms[id].x, localRooms[id].x + localRooms[id].width]
+        )
+      );
+      const span2 = tilesCleanly(
+        group2.map((id): [number, number] =>
+          axis === "x"
+            ? [localRooms[id].y, localRooms[id].y + localRooms[id].length]
+            : [localRooms[id].x, localRooms[id].x + localRooms[id].width]
+        )
+      );
+      if (!span1 || !span2) return;
+      if (Math.abs(span1[0] - span2[0]) > WALL_MATCH_TOL || Math.abs(span1[1] - span2[1]) > WALL_MATCH_TOL) return;
+      const key = `${axis}:${coord.toFixed(2)}:${[...group1].sort().join(",")}|${[...group2].sort().join(",")}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      walls.push(
+        axis === "x"
+          ? { axis, group1, group2, x1: coord, y1: span1[0], x2: coord, y2: span1[1] }
+          : { axis, group1, group2, x1: span1[0], y1: coord, x2: span1[1], y2: coord }
+      );
+    }
+
+    const xCuts = new Set<number>();
+    const yCuts = new Set<number>();
+    for (const id of ids) {
+      const r = localRooms[id];
+      xCuts.add(round2(r.x));
+      xCuts.add(round2(r.x + r.width));
+      yCuts.add(round2(r.y));
+      yCuts.add(round2(r.y + r.length));
+    }
+    for (const x of xCuts) {
+      const west = ids.filter((id) => Math.abs(localRooms[id].x + localRooms[id].width - x) < WALL_MATCH_TOL);
+      const east = ids.filter((id) => Math.abs(localRooms[id].x - x) < WALL_MATCH_TOL);
+      addWall("x", x, west, east);
+    }
+    for (const y of yCuts) {
+      const north = ids.filter((id) => Math.abs(localRooms[id].y + localRooms[id].length - y) < WALL_MATCH_TOL);
+      const south = ids.filter((id) => Math.abs(localRooms[id].y - y) < WALL_MATCH_TOL);
+      addWall("y", y, north, south);
+    }
+    return walls;
+  }, [isEditingRoomsThisFloor, localRooms]);
+
+  function startWallDrag(e: React.MouseEvent, wall: SharedWallHandle) {
+    e.stopPropagation();
+    e.preventDefault();
+    const orig: Record<string, RoomRect> = {};
+    for (const id of [...wall.group1, ...wall.group2]) {
+      const r = localRooms[id];
+      if (!r) return;
+      orig[id] = r;
+    }
+    const p = screenToSvgPoint(e.clientX, e.clientY);
+    setWallDrag({ axis: wall.axis, group1: wall.group1, group2: wall.group2, start: wall.axis === "x" ? p.x : p.y, orig });
+  }
+
+  useEffect(() => {
+    if (!wallDrag) return;
+
+    function handleMove(e: MouseEvent) {
+      const drag = wallDrag!;
+      const p = screenToSvgPoint(e.clientX, e.clientY);
+      const current = drag.axis === "x" ? p.x : p.y;
+
+      let minDelta = -Infinity;
+      let maxDelta = Infinity;
+      for (const id of drag.group1) {
+        const size = drag.axis === "x" ? drag.orig[id].width : drag.orig[id].length;
+        minDelta = Math.max(minDelta, MIN_ROOM_SIZE - size);
+      }
+      for (const id of drag.group2) {
+        const size = drag.axis === "x" ? drag.orig[id].width : drag.orig[id].length;
+        maxDelta = Math.min(maxDelta, size - MIN_ROOM_SIZE);
+      }
+      const delta = Math.min(Math.max(current - drag.start, minDelta), maxDelta);
+
+      setLocalRooms((prev) => {
+        const next = { ...prev };
+        for (const id of drag.group1) {
+          const orig = drag.orig[id];
+          next[id] =
+            drag.axis === "x" ? { ...orig, width: round2(orig.width + delta) } : { ...orig, length: round2(orig.length + delta) };
+        }
+        for (const id of drag.group2) {
+          const orig = drag.orig[id];
+          next[id] =
+            drag.axis === "x"
+              ? { ...orig, x: round2(orig.x + delta), width: round2(orig.width - delta) }
+              : { ...orig, y: round2(orig.y + delta), length: round2(orig.length - delta) };
+        }
+        return next;
+      });
+    }
+    function handleUp() {
+      setWallDrag(null);
+    }
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wallDrag]);
+
+  function startParkingDrag(e: React.MouseEvent, mode: "move" | "resize") {
+    e.stopPropagation();
+    e.preventDefault();
+    if (!localParking) return;
+    const p = screenToSvgPoint(e.clientX, e.clientY);
+    setParkingDrag({ mode, startX: p.x, startY: p.y, orig: localParking });
+  }
+
+  useEffect(() => {
+    if (!parkingDrag) return;
+    // Parking is allowed to sit within the mandatory front setback, so it's
+    // clamped to the whole plot, not the (already setback-shrunk) outline
+    // rooms are clamped to.
+    const plotW = plan.meta.plot_width;
+    const plotL = plan.meta.plot_length;
+
+    function handleMove(e: MouseEvent) {
+      const drag = parkingDrag!;
+      const p = screenToSvgPoint(e.clientX, e.clientY);
+      const dx = p.x - drag.startX;
+      const dy = p.y - drag.startY;
+      const orig = drag.orig;
+
+      let next: RoomRect;
+      if (drag.mode === "move") {
+        const maxX = plotW - orig.width;
+        const maxY = plotL - orig.length;
+        next = {
+          x: Math.min(Math.max(orig.x + dx, 0), Math.max(maxX, 0)),
+          y: Math.min(Math.max(orig.y + dy, 0), Math.max(maxY, 0)),
+          width: orig.width,
+          length: orig.length,
+        };
+      } else {
+        const maxWidth = plotW - orig.x;
+        const maxLength = plotL - orig.y;
+        next = {
+          x: orig.x,
+          y: orig.y,
+          width: Math.min(Math.max(orig.width + dx, MIN_PARKING_SIZE), maxWidth),
+          length: Math.min(Math.max(orig.length + dy, MIN_PARKING_SIZE), maxLength),
+        };
+      }
+      setLocalParking({ x: round2(next.x), y: round2(next.y), width: round2(next.width), length: round2(next.length) });
+    }
+    function handleUp() {
+      setParkingDrag(null);
+    }
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parkingDrag, plan.meta.plot_width, plan.meta.plot_length]);
+
   async function saveRoomLayout() {
     if (!editable || editingRoomsFloorIdx === null || savingRooms) return;
     const changed: Record<string, RoomRect> = {};
@@ -835,20 +1384,40 @@ export default function FloorPlanViewer({
         changed[r.id] = local;
       }
     }
-    if (Object.keys(changed).length === 0) {
+    const parkingChanged =
+      !!localParking &&
+      !!floor.parking &&
+      (localParking.x !== floor.parking.x ||
+        localParking.y !== floor.parking.y ||
+        localParking.width !== floor.parking.width ||
+        localParking.length !== floor.parking.length);
+
+    if (Object.keys(changed).length === 0 && !parkingChanged) {
       cancelEditRooms();
       return;
     }
     setSavingRooms(true);
     setRoomEditError(null);
     try {
-      const updated = await api.updateRoomLayout(projectId!, floorPlanId!, {
-        floor_number: floor.floor_number,
-        rooms: changed,
-      });
-      onFurnitureSaved?.(updated.plan_data);
+      let latestPlanData = null;
+      if (Object.keys(changed).length > 0) {
+        const updated = await api.updateRoomLayout(projectId!, floorPlanId!, {
+          floor_number: floor.floor_number,
+          rooms: changed,
+        });
+        latestPlanData = updated.plan_data;
+      }
+      if (parkingChanged && localParking) {
+        const updated = await api.updateParking(projectId!, floorPlanId!, {
+          floor_number: floor.floor_number,
+          parking: localParking,
+        });
+        latestPlanData = updated.plan_data;
+      }
+      if (latestPlanData) onFurnitureSaved?.(latestPlanData);
       setEditingRoomsFloorIdx(null);
       setLocalRooms({});
+      setLocalParking(null);
     } catch (err) {
       setRoomEditError(err instanceof ApiError ? err.message : "Could not save room layout");
     } finally {
@@ -1011,6 +1580,34 @@ export default function FloorPlanViewer({
               <span className="drawing-panel-floor">
                 {plan.meta.facing.charAt(0).toUpperCase() + plan.meta.facing.slice(1)} facing
               </span>
+              <div className="view-mode-toggle" role="group" aria-label="View mode">
+                <button
+                  type="button"
+                  className={`btn btn-secondary view-mode-btn ${viewMode === "2d" ? "is-active" : ""}`}
+                  onClick={() => setViewMode("2d")}
+                >
+                  2D Plan
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-secondary view-mode-btn ${viewMode === "3d" ? "is-active" : ""}`}
+                  onClick={() => setViewMode("3d")}
+                >
+                  3D View
+                </button>
+              </div>
+              {viewMode === "2d" && !isEditingThisFloor && (
+                <label className="show-furniture-toggle">
+                  <input
+                    type="checkbox"
+                    checked={show2DFurniture}
+                    onChange={(e) => setShow2DFurniture(e.target.checked)}
+                  />
+                  Show furniture
+                </label>
+              )}
+              {viewMode === "2d" && (
+              <>
               <button type="button" className="btn btn-secondary drawing-panel-download" onClick={handleDownloadPng} disabled={!!downloading}>
                 {downloading === "png" ? "Preparing…" : "Download PNG"}
               </button>
@@ -1051,8 +1648,13 @@ export default function FloorPlanViewer({
                   </button>
                 </>
               )}
+              </>
+              )}
             </div>
           </div>
+          {viewMode === "3d" ? (
+            <FloorPlan3DView plan={plan} />
+          ) : (
           <div
             className="drawing-svg-wrap"
             onMouseMove={handleMouseMove}
@@ -1078,36 +1680,123 @@ export default function FloorPlanViewer({
                       <g dangerouslySetInnerHTML={{ __html: furnitureIconMarkup(item.type) }} />
                     </g>
                   ))}
+                  {(localFurniture[editingRoomId] ?? []).map((item, idx) => {
+                    const handleSize = Math.min(Math.max(Math.min(item.w, item.l) * 0.35, 0.4), 1.1);
+                    return (
+                      <rect
+                        key={`resize-${idx}`}
+                        x={item.x + item.w - handleSize}
+                        y={item.y + item.l - handleSize}
+                        width={handleSize}
+                        height={handleSize}
+                        className={`furniture-resize-handle ${furnitureResize?.idx === idx ? "is-dragging" : ""}`}
+                        onMouseDown={(e) => startFurnitureResize(e, editingRoomId, idx)}
+                      />
+                    );
+                  })}
                 </g>
               )}
               {isEditingRoomsThisFloor && (
                 <g>
+                  {/* Three paint layers so overlapping hit-areas resolve
+                      predictably: room bodies (move) at the bottom, wall-drag
+                      lines in the middle (so they win over a room body along
+                      a shared boundary), and corner resize handles last/on
+                      top (so a resize handle always wins even where a wall
+                      line's stroke happens to pass right by a corner). */}
+                  {Object.entries(localRooms).map(([roomId, rect]) => (
+                    <g key={`body-${roomId}`} className={roomDrag?.roomId === roomId ? "room-editable is-dragging" : "room-editable"}>
+                      <rect
+                        x={rect.x}
+                        y={rect.y}
+                        width={rect.width}
+                        height={rect.length}
+                        className="room-edit-rect"
+                        onMouseDown={(e) => startRoomDrag(e, roomId, "move")}
+                      />
+                      <text x={rect.x + rect.width / 2} y={rect.y + rect.length / 2} className="room-edit-label">
+                        {fmt(rect.width)}&#8242; &times; {fmt(rect.length)}&#8242;
+                      </text>
+                    </g>
+                  ))}
+                  {sharedWalls.map((wall) => {
+                    const key = `${wall.axis}:${[...wall.group1].sort().join(",")}|${[...wall.group2].sort().join(",")}`;
+                    const isDragging =
+                      !!wallDrag &&
+                      wallDrag.axis === wall.axis &&
+                      [...wallDrag.group1].sort().join(",") === [...wall.group1].sort().join(",") &&
+                      [...wallDrag.group2].sort().join(",") === [...wall.group2].sort().join(",");
+                    return (
+                      <line
+                        key={key}
+                        x1={wall.x1}
+                        y1={wall.y1}
+                        x2={wall.x2}
+                        y2={wall.y2}
+                        className={`wall-edit-handle wall-edit-handle-${wall.axis} ${isDragging ? "is-dragging" : ""}`}
+                        onMouseDown={(e) => startWallDrag(e, wall)}
+                      />
+                    );
+                  })}
                   {Object.entries(localRooms).map(([roomId, rect]) => {
                     const handleSize = Math.min(rect.width, rect.length) * 0.18 || 1;
+                    const corners: { mode: RoomResizeCorner; x: number; y: number; cursor: string }[] = [
+                      { mode: "resize-tl", x: rect.x, y: rect.y, cursor: "nwse" },
+                      { mode: "resize-tr", x: rect.x + rect.width - handleSize, y: rect.y, cursor: "nesw" },
+                      { mode: "resize-bl", x: rect.x, y: rect.y + rect.length - handleSize, cursor: "nesw" },
+                      {
+                        mode: "resize-br",
+                        x: rect.x + rect.width - handleSize,
+                        y: rect.y + rect.length - handleSize,
+                        cursor: "nwse",
+                      },
+                    ];
                     return (
-                      <g key={roomId} className={roomDrag?.roomId === roomId ? "room-editable is-dragging" : "room-editable"}>
-                        <rect
-                          x={rect.x}
-                          y={rect.y}
-                          width={rect.width}
-                          height={rect.length}
-                          className="room-edit-rect"
-                          onMouseDown={(e) => startRoomDrag(e, roomId, "move")}
-                        />
-                        <text x={rect.x + rect.width / 2} y={rect.y + rect.length / 2} className="room-edit-label">
-                          {fmt(rect.width)}&#8242; &times; {fmt(rect.length)}&#8242;
-                        </text>
-                        <rect
-                          x={rect.x + rect.width - handleSize}
-                          y={rect.y + rect.length - handleSize}
-                          width={handleSize}
-                          height={handleSize}
-                          className="room-edit-handle"
-                          onMouseDown={(e) => startRoomDrag(e, roomId, "resize")}
-                        />
+                      <g key={`handles-${roomId}`}>
+                        {corners.map((c) => (
+                          <rect
+                            key={c.mode}
+                            x={c.x}
+                            y={c.y}
+                            width={handleSize}
+                            height={handleSize}
+                            className={`room-edit-handle room-edit-handle-${c.cursor}`}
+                            onMouseDown={(e) => startRoomDrag(e, roomId, c.mode)}
+                          />
+                        ))}
                       </g>
                     );
                   })}
+                  {localParking && (() => {
+                    const handleSize = Math.min(localParking.width, localParking.length) * 0.18 || 1;
+                    return (
+                      <g className={parkingDrag ? "parking-editable is-dragging" : "parking-editable"}>
+                        <rect
+                          x={localParking.x}
+                          y={localParking.y}
+                          width={localParking.width}
+                          height={localParking.length}
+                          className="parking-edit-rect"
+                          onMouseDown={(e) => startParkingDrag(e, "move")}
+                        />
+                        <text
+                          x={localParking.x + localParking.width / 2}
+                          y={localParking.y + localParking.length / 2}
+                          className="room-edit-label"
+                        >
+                          Parking {fmt(localParking.width)}&#8242; &times; {fmt(localParking.length)}&#8242;
+                        </text>
+                        <rect
+                          x={localParking.x + localParking.width - handleSize}
+                          y={localParking.y + localParking.length - handleSize}
+                          width={handleSize}
+                          height={handleSize}
+                          className="room-edit-handle"
+                          onMouseDown={(e) => startParkingDrag(e, "resize")}
+                        />
+                      </g>
+                    );
+                  })()}
                 </g>
               )}
             </svg>
@@ -1129,6 +1818,7 @@ export default function FloorPlanViewer({
               </div>
             )}
           </div>
+          )}
           <div className="legend">
             <span className="legend-title">Key:</span>
             {(["social", "sleep", "wet", "other"] as const).map((c) => (
@@ -1197,6 +1887,8 @@ export default function FloorPlanViewer({
         <div className="fpv-side">
         <div className="schedule-panel card">
           <h2>Room schedule</h2>
+          {editable && attachedBathroomError && <div className="error-banner">{attachedBathroomError}</div>}
+          {editable && attachedBathroomNotice && <div className="notice-banner">{attachedBathroomNotice}</div>}
           <table className="schedule">
             <thead>
               <tr>
@@ -1205,6 +1897,7 @@ export default function FloorPlanViewer({
                 <th className="num">W &times; L (ft)</th>
                 <th className="num">Area</th>
                 <th></th>
+                {editable && <th></th>}
               </tr>
             </thead>
             <tbody>
@@ -1223,6 +1916,27 @@ export default function FloorPlanViewer({
                   <td>
                     {r.below_min_size ? <span className="chip warn">Under min</span> : <span className="chip ok">OK</span>}
                   </td>
+                  {editable && (
+                    <td className="attached-bath-cell" onClick={(e) => e.stopPropagation()}>
+                      {r.attached_to ? (
+                        <span className="muted">Attached</span>
+                      ) : ATTACHED_BATHROOM_INELIGIBLE_TYPES.has(r.type) ? null : (
+                        <button
+                          type="button"
+                          className={r.attached_bathroom_id ? "attached-bath-btn is-remove" : "attached-bath-btn"}
+                          disabled={attachedBathroomBusy === r.id}
+                          title={r.attached_bathroom_id ? `Remove attached bathroom from ${r.label}` : `Add attached bathroom to ${r.label}`}
+                          onClick={() => toggleAttachedBathroom(r)}
+                        >
+                          {attachedBathroomBusy === r.id
+                            ? "…"
+                            : r.attached_bathroom_id
+                              ? "Remove bath"
+                              : "+ Bath"}
+                        </button>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -1262,19 +1976,65 @@ export default function FloorPlanViewer({
                     <li className="muted">No furniture in this room yet.</li>
                   )}
                 </ul>
-                <div className="furniture-add-row">
-                  <select value={addType} onChange={(e) => setAddType(e.target.value)}>
-                    {FURNITURE_CATALOG.map((f) => (
-                      <option key={f.type} value={f.type}>
-                        {f.label}
-                      </option>
-                    ))}
-                  </select>
-                  <button type="button" className="btn btn-secondary" onClick={() => addFurniture(editingRoomId, addType)}>
-                    Add
-                  </button>
+                <div className="furniture-catalog">
+                  {suggestedFurniture.length > 0 && (
+                    <div className="furniture-catalog-section">
+                      <div className="furniture-catalog-heading">
+                        Suggested for {floor.rooms.find((r) => r.id === editingRoomId)?.label ?? "this room"}
+                      </div>
+                      <div className="furniture-catalog-grid">
+                        {suggestedFurniture.map((f) => (
+                          <button
+                            key={f.type}
+                            type="button"
+                            className="furniture-catalog-btn"
+                            title={`Add ${f.label}`}
+                            onClick={() => addFurniture(editingRoomId, f.type)}
+                          >
+                            <svg
+                              viewBox="0 0 1 1"
+                              className="furniture-catalog-icon"
+                              dangerouslySetInnerHTML={{ __html: furnitureIconMarkup(f.type) }}
+                            />
+                            <span>{f.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {otherCategories.length > 0 && (
+                    <details className="furniture-catalog-more">
+                      <summary>More furniture</summary>
+                      {otherCategories.map((cat) => (
+                        <div className="furniture-catalog-section" key={cat.label}>
+                          <div className="furniture-catalog-heading">{cat.label}</div>
+                          <div className="furniture-catalog-grid">
+                            {cat.items.map((f) => (
+                              <button
+                                key={f.type}
+                                type="button"
+                                className="furniture-catalog-btn"
+                                title={`Add ${f.label}`}
+                                onClick={() => addFurniture(editingRoomId, f.type)}
+                              >
+                                <svg
+                                  viewBox="0 0 1 1"
+                                  className="furniture-catalog-icon"
+                                  dangerouslySetInnerHTML={{ __html: furnitureIconMarkup(f.type) }}
+                                />
+                                <span>{f.label}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </details>
+                  )}
                 </div>
-                <p className="muted furniture-hint">Drag items in the plan to reposition them.</p>
+                <p className="muted furniture-hint">
+                  Drag items in the plan to reposition them, or drag one across a wall into another room to move it
+                  there.
+                </p>
               </>
             )}
           </div>
@@ -1284,8 +2044,10 @@ export default function FloorPlanViewer({
             <h2>Room layout</h2>
             {roomEditError && <div className="error-banner">{roomEditError}</div>}
             <p className="muted">
-              Drag a room to move it, or drag its bottom-right handle to resize. The staircase can't be moved (it
-              has to stay aligned across floors), and moving or resizing a room clears its furniture.
+              Drag a room to move it, or drag any of its 4 corner handles to resize. Drag a highlighted wall shared by
+              two rooms to resize both at once -- e.g. shrink a dining room and extend the bedroom next to it in one
+              move. The staircase can't be moved (it has to stay aligned across floors), and moving or resizing a
+              room clears its furniture.
             </p>
             <ul className="furniture-list">
               {floor.rooms

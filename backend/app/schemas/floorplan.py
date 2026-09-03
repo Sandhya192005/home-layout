@@ -31,6 +31,18 @@ class RoomLayoutUpdate(BaseModel):
     rooms: dict[str, RoomRectUpdate]
 
 
+class ParkingRectUpdate(BaseModel):
+    x: float = Field(ge=0)
+    y: float = Field(ge=0)
+    width: float = Field(gt=0)
+    length: float = Field(gt=0)
+
+
+class ParkingLayoutUpdate(BaseModel):
+    floor_number: int
+    parking: ParkingRectUpdate
+
+
 class FloorPlanRead(AuditRead):
     model_config = ConfigDict(from_attributes=True)
 
@@ -51,3 +63,12 @@ class FloorPlanGenerateResponse(BaseModel):
 
 class FloorPlanStatusUpdate(BaseModel):
     status: str
+
+
+class AttachedBathroomCreate(BaseModel):
+    floor_number: int
+
+
+class AttachedBathroomResponse(BaseModel):
+    floor_plan: FloorPlanRead
+    warnings: list[str] = []
