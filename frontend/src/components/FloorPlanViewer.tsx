@@ -1677,13 +1677,34 @@ export default function FloorPlanViewer({
         <div className="drawing-panel card">
           <div className="drawing-panel-head">
             <span className="drawing-panel-title">{floor.label} Plan</span>
-            <div className="drawing-panel-meta">
+            <div className="drawing-panel-info">
               <span className="drawing-panel-plot">
                 Plot: {fmt0(plan.meta.plot_width)}&#8242; &times; {fmt0(plan.meta.plot_length)}&#8242;
               </span>
               <span className="drawing-panel-floor">
                 {plan.meta.facing.charAt(0).toUpperCase() + plan.meta.facing.slice(1)} facing
               </span>
+            </div>
+          </div>
+
+          <div className="drawing-panel-toolbar">
+            <div className="toolbar-row">
+              <div className="view-mode-toggle" role="group" aria-label="View mode">
+                <button
+                  type="button"
+                  className={`btn btn-secondary view-mode-btn ${viewMode === "2d" ? "is-active" : ""}`}
+                  onClick={() => setViewMode("2d")}
+                >
+                  2D Plan
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-secondary view-mode-btn ${viewMode === "3d" ? "is-active" : ""}`}
+                  onClick={() => setViewMode("3d")}
+                >
+                  3D View
+                </button>
+              </div>
               {editable && onUndo && (
                 <div className="undo-redo-group" role="group" aria-label="Undo/redo">
                   <button
@@ -1714,22 +1735,6 @@ export default function FloorPlanViewer({
                   </button>
                 </div>
               )}
-              <div className="view-mode-toggle" role="group" aria-label="View mode">
-                <button
-                  type="button"
-                  className={`btn btn-secondary view-mode-btn ${viewMode === "2d" ? "is-active" : ""}`}
-                  onClick={() => setViewMode("2d")}
-                >
-                  2D Plan
-                </button>
-                <button
-                  type="button"
-                  className={`btn btn-secondary view-mode-btn ${viewMode === "3d" ? "is-active" : ""}`}
-                  onClick={() => setViewMode("3d")}
-                >
-                  3D View
-                </button>
-              </div>
               {viewMode === "2d" && !isEditingThisFloor && (
                 <label className="show-furniture-toggle">
                   <input
@@ -1740,51 +1745,52 @@ export default function FloorPlanViewer({
                   Show furniture
                 </label>
               )}
-              {viewMode === "2d" && (
-              <>
-              <button type="button" className="btn btn-secondary drawing-panel-download" onClick={handleDownloadPng} disabled={!!downloading}>
-                {downloading === "png" ? "Preparing…" : "Download PNG"}
-              </button>
-              <button type="button" className="btn btn-secondary drawing-panel-download" onClick={handleDownloadPdf} disabled={!!downloading}>
-                {downloading === "pdf"
-                  ? "Preparing…"
-                  : plan.floors.length > 1
-                    ? `Download PDF (${plan.floors.length} floors)`
-                    : "Download PDF"}
-              </button>
-              {editable && !isEditingThisFloor && !isEditingRoomsThisFloor && (
-                <button type="button" className="btn btn-secondary drawing-panel-download" onClick={startEditFurniture}>
-                  Edit furniture
-                </button>
-              )}
-              {editable && isEditingThisFloor && (
-                <>
-                  <button type="button" className="btn btn-primary drawing-panel-download" onClick={saveFurniture} disabled={savingFurniture}>
-                    {savingFurniture ? "Saving…" : "Save layout"}
-                  </button>
-                  <button type="button" className="btn btn-secondary drawing-panel-download" onClick={cancelEditFurniture} disabled={savingFurniture}>
-                    Cancel
-                  </button>
-                </>
-              )}
-              {editable && !isEditingRoomsThisFloor && !isEditingThisFloor && (
-                <button type="button" className="btn btn-secondary drawing-panel-download" onClick={startEditRooms}>
-                  Edit rooms
-                </button>
-              )}
-              {editable && isEditingRoomsThisFloor && (
-                <>
-                  <button type="button" className="btn btn-primary drawing-panel-download" onClick={saveRoomLayout} disabled={savingRooms}>
-                    {savingRooms ? "Saving…" : "Save room layout"}
-                  </button>
-                  <button type="button" className="btn btn-secondary drawing-panel-download" onClick={cancelEditRooms} disabled={savingRooms}>
-                    Cancel
-                  </button>
-                </>
-              )}
-              </>
-              )}
             </div>
+
+            {viewMode === "2d" && (
+              <div className="toolbar-row">
+                <button type="button" className="btn btn-secondary drawing-panel-download" onClick={handleDownloadPng} disabled={!!downloading}>
+                  {downloading === "png" ? "Preparing…" : "Download PNG"}
+                </button>
+                <button type="button" className="btn btn-secondary drawing-panel-download" onClick={handleDownloadPdf} disabled={!!downloading}>
+                  {downloading === "pdf"
+                    ? "Preparing…"
+                    : plan.floors.length > 1
+                      ? `Download PDF (${plan.floors.length} floors)`
+                      : "Download PDF"}
+                </button>
+                {editable && !isEditingThisFloor && !isEditingRoomsThisFloor && (
+                  <button type="button" className="btn btn-secondary drawing-panel-download" onClick={startEditFurniture}>
+                    Edit furniture
+                  </button>
+                )}
+                {editable && isEditingThisFloor && (
+                  <>
+                    <button type="button" className="btn btn-primary drawing-panel-download" onClick={saveFurniture} disabled={savingFurniture}>
+                      {savingFurniture ? "Saving…" : "Save layout"}
+                    </button>
+                    <button type="button" className="btn btn-secondary drawing-panel-download" onClick={cancelEditFurniture} disabled={savingFurniture}>
+                      Cancel
+                    </button>
+                  </>
+                )}
+                {editable && !isEditingRoomsThisFloor && !isEditingThisFloor && (
+                  <button type="button" className="btn btn-secondary drawing-panel-download" onClick={startEditRooms}>
+                    Edit rooms
+                  </button>
+                )}
+                {editable && isEditingRoomsThisFloor && (
+                  <>
+                    <button type="button" className="btn btn-primary drawing-panel-download" onClick={saveRoomLayout} disabled={savingRooms}>
+                      {savingRooms ? "Saving…" : "Save room layout"}
+                    </button>
+                    <button type="button" className="btn btn-secondary drawing-panel-download" onClick={cancelEditRooms} disabled={savingRooms}>
+                      Cancel
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
           </div>
           {editable && undoRedoError && <div className="error-banner">{undoRedoError}</div>}
           {viewMode === "3d" ? (

@@ -46,7 +46,8 @@
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 1rem;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
   padding: 0 0.35rem 0.7rem;
   margin-bottom: 0.6rem;
   border-bottom: 1px solid var(--surface-line);
@@ -73,10 +74,28 @@
   color: var(--ink-soft);
 }
 
-.drawing-panel-meta {
+.drawing-panel-info {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.9rem;
+}
+
+/* Toolbar sits below the title/plot info as its own block, on its own
+   row(s), so it never competes with that header text for horizontal
+   space -- every control wraps onto a new line instead of being pushed
+   off-screen once there isn't room for it. */
+.drawing-panel-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.toolbar-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 .drawing-panel-download {
   padding: 0.4rem 0.8rem;
