@@ -23,8 +23,8 @@ Two independent apps in one repo: `backend/` (FastAPI + PostgreSQL) and
 Note: `PROJECT_STATUS.md` says the frontend is "not built yet" — that is
 stale. The frontend under `frontend/src/` is fully implemented (auth,
 project/requirement flow, SVG floor-plan viewer plus a Three.js 3D view,
-furniture editor, manual room-layout editor, PNG/PDF export, shareable
-public links, version compare).
+furniture editor, manual room-layout editor with undo/redo, room-type
+replacement, PNG/PDF export, shareable public links, version compare).
 
 ## Commands
 
@@ -105,8 +105,9 @@ inside the user's actual projects.
   is shared by every layout/editing feature — run the **full** backend
   suite afterward (`pytest`), not just a test file for the feature you
   touched. `test_generation.py`, `test_room_layout.py`,
-  `test_parking_layout.py`, and `test_attached_bathroom.py` all exercise
-  this shared code from different angles and have each independently caught
+  `test_parking_layout.py`, `test_attached_bathroom.py`,
+  `test_replace_room.py`, and `test_plan_data_restore.py` all exercise this
+  shared code from different angles and have each independently caught
   regressions here.
 - `npm run lint` (oxlint, config in `.oxlintrc.json`) only enables
   `react/rules-of-hooks` and `react/only-export-components` beyond the
@@ -195,7 +196,7 @@ in recent commits which allows floors to diverge.
 
 ### Manual editing after generation
 
-Three endpoints mutate an existing `FloorPlan.plan_data` in place rather
+Four endpoints mutate an existing `FloorPlan.plan_data` in place rather
 than regenerating from scratch, all funneling through the same two
 functions: `recompute_floor_geometry(floor, facing)` (rebuilds
 windows/doors/walls for one floor from its rooms' *current* x/y/width/length)
@@ -204,11 +205,25 @@ rebuilt door graph) — reusing exactly the derivation the initial generation
 pipeline uses so a hand-edited layout keeps the same guarantees:
 
 - `PUT .../rooms` — drag-move/resize a room (frontend room-layout editor).
+  **Clears that room's `furniture`** whenever its rect actually moved/
+  resized (stale absolute-coordinate placements would otherwise land
+  outside the new bounds) — see Undo/Redo below for how the frontend lets
+  a user recover from that.
 - `PUT .../parking` — drag-resize the parking rect.
 - `POST` / `DELETE .../rooms/{room_id}/attached-bathroom` — carve a bathroom
   out of an eligible room (or remove one), via `add_attached_bathroom` /
   `remove_attached_bathroom`, scoring and trial-validating candidate edges
   before committing.
+- `PUT .../rooms/{room_id}/replace` — convert a room to a different
+  `ROOM_LIBRARY` type in place (e.g. Bathroom → Kitchen) via `replace_room`,
+  **reusing its existing rect exactly as-is** (not a resize — geometry is
+  untouched, only type/label/furniture and the derived windows/doors/walls
+  change). Rejects structural/entrance-role types
+  (`ROOM_REPLACE_INELIGIBLE_TYPES` = staircase/veranda/foyer) as either
+  source or target, and rejects if the room is below the new type's
+  minimum width/length/area. Warns (without blocking) on missing
+  ventilation, missing plumbing/drainage access for a `WET_ROOM_TYPES`
+  room, or a Vastu-zone mismatch.
 
 Two invariants this pattern exists to protect — a rect can only be split
 along a *full* edge (never a corner notch, which would need unsupported
@@ -219,6 +234,18 @@ pass or it can silently disconnect rooms — are written up in full in
 The **`add-geometry-endpoint`** skill has the step-by-step pattern (trial-
 copy-then-commit, candidate scoring, required test coverage) for adding
 another endpoint like these.
+
+**Undo/Redo**: since geometry-mutating edits can destructively clear
+furniture (see `PUT .../rooms` above), there's a general-purpose
+`PUT .../floorplans/{id}/plan-data` (schema: `PlanDataRestore`) that
+overwrites `plan_data` wholesale with a previously-returned snapshot,
+re-running `_recalculate_estimates` but skipping geometry validation
+(the snapshot was already a server-committed state). The frontend
+(`ProjectDetailPage.tsx`) keeps a client-side stack of `plan_data`
+snapshots — every edit path already funnels through one `applyPlanUpdate`
+callback, so this one endpoint serves undo/redo for furniture edits, room/
+parking resize, attached-bathroom, and room-replace uniformly, with no
+per-edit-type inverse logic needed.
 
 ### Key API routes (`app/api/v1/`, prefixed `/api/v1`)
 
@@ -235,6 +262,10 @@ another endpoint like these.
   `PUT .../{floor_plan_id}/furniture` (furniture-editor updates),
   `PUT .../{floor_plan_id}/rooms` / `.../parking` (manual layout edits),
   `POST/DELETE .../{floor_plan_id}/rooms/{room_id}/attached-bathroom`,
+  `PUT .../{floor_plan_id}/rooms/{room_id}/replace` (convert a room to a
+  different type in place, geometry unchanged),
+  `PUT .../{floor_plan_id}/plan-data` (undo/redo: restore a whole
+  `plan_data` snapshot),
   `POST/GET/DELETE .../{floor_plan_id}/share` (create/fetch/revoke a
   public share token, backed by `FloorPlanShare`)
 - `public`: `GET /public/floorplans/{token}` — unauthenticated read of a
@@ -277,10 +308,18 @@ src/
                           SVG, drag-to-edit furniture and room layout (4
                           corner resize handles + drag-a-shared-wall to
                           resize two rooms at once), attached-bathroom
-                          add/remove buttons in the room schedule, PNG
-                          export (canvas.toBlob) and PDF export via a
-                          hand-rolled minimal PDF builder (buildMinimalPdf,
-                          no pdf/canvas libraries in package.json)
+                          add/remove and room-replace controls in the room
+                          schedule, PNG export (canvas.toBlob) and PDF
+                          export via a hand-rolled minimal PDF builder
+                          (buildMinimalPdf, no pdf/canvas libraries in
+                          package.json). The toolbar above the drawing is a
+                          two-row flex-wrap layout (view toggle/undo-redo/
+                          show-furniture on one row, downloads/edit actions
+                          on another) specifically so controls wrap onto a
+                          new line instead of silently overflowing
+                          off-panel as more buttons get added — keep new
+                          toolbar buttons inside `.toolbar-row`, not back in
+                          one unwrapped row.
     FloorPlan3DView.tsx   Three.js (OrbitControls) 3D walkthrough of the
                           same plan_data — rebuilds rooms/furniture/roof/
                           parked-vehicle meshes procedurally from the plan
@@ -290,7 +329,12 @@ src/
                           correctly-oriented mesh requires un-swapping back
                           to the natural pose first (`rotation % 180 !== 0`
                           means swapped), mirroring the exact transform the
-                          2D SVG icon renderer already uses.
+                          2D SVG icon renderer already uses. Per-floor
+                          isolation (view one floor at a time vs. the whole
+                          stack) via a floor-select control; car/bike meshes
+                          are built from real-world-scaled primitives
+                          (`buildCarMesh`/`buildBikeMesh`), not fixed-size
+                          placeholders, colored `#3B82F6` / `#F59E0B`.
     furnitureIcons.ts, siteIcons.ts    icon/glyph lookups keyed by type
     ChatWidget.tsx   floating "Ask about your house" chat panel, mounted in
                      Layout.tsx for any logged-in user; calls POST /chat
