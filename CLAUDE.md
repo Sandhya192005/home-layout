@@ -26,6 +26,11 @@ project/requirement flow, SVG floor-plan viewer plus a Three.js 3D view,
 furniture editor, manual room-layout editor with undo/redo, room-type
 replacement, PNG/PDF export, shareable public links, version compare).
 
+`ARCHITECTURE.md` is the visual companion to this file — Mermaid diagrams
+of the request flow, the generation pipeline, and the plan-editing loop.
+Read it alongside this file's prose when you need the shape of the system
+rather than the details.
+
 ## Commands
 
 ### Backend (`backend/`)
@@ -51,7 +56,27 @@ Postgres):
 cd backend
 .venv\Scripts\python.exe -m pytest         # run the full suite
 .venv\Scripts\python.exe -m pytest -k test_regenerate_bumps_version_and_changes_plan   # run a single test
+.venv\Scripts\python.exe -m pytest tests/test_replace_room.py -x -q   # one file, stop on first failure
 ```
+
+`conftest.py` provides a **fixture ladder** — depend on the highest rung
+you need and everything below it is built for you, rather than re-posting
+the setup requests by hand:
+
+| fixture | gives you |
+| --- | --- |
+| `client` | `TestClient` on a fresh in-memory SQLite DB (also resets `public_share_limiter`) |
+| `auth_headers` | a registered+logged-in user's `Authorization` header |
+| `project` | that user's created project (dict) |
+| `requirement` | a saved requirement on it (3BHK, 55x40 north-facing, 2 floors) |
+| `floor_plan` | the generated `FloorPlan` for that requirement |
+
+Plus two helpers: `requirement_payload(**overrides)` builds a valid
+requirement body with per-test tweaks (`requirement_payload(floors=1,
+vastu_compliant=False)`), and `register_and_login(client, email, password)`
+creates a *second* user — both are plain functions, imported inside the
+test (`from tests.conftest import register_and_login`), and the second-user
+helper is how every cross-user 403 test is written.
 
 The two original standalone smoke-test scripts still work and cover the same
 ground end-to-end (useful for a quick manual sanity check without pytest):
@@ -136,6 +161,17 @@ app/
 alembic/versions/   hand-written migrations (no autogenerate configured — write revisions manually)
 ```
 
+All settings are env-driven through one `Settings` class
+(`core/config.py`, `.env` via pydantic-settings) and every field has a
+working default, so the app boots with no `.env` at all. Beyond
+`DATABASE_URL`/`SECRET_KEY`: `ACCESS_TOKEN_EXPIRE_MINUTES` (60) /
+`REFRESH_TOKEN_EXPIRE_DAYS` (30), `BACKEND_CORS_ORIGINS` (defaults cover
+Vite's :5173 and :3000 — a frontend served from any other port gets
+CORS-blocked until this is set), `PUBLIC_SHARE_RATE_LIMIT_MAX` /
+`_WINDOW_SECONDS` (30 per 60s), and the three `NVIDIA_NIM_*` chat vars.
+Read settings via the module-level `settings` singleton; don't re-read
+`os.environ`.
+
 Every model mixes in `AuditMixin` (`app/models/mixins.py`): `created_at` /
 `updated_at` / `deleted_at` / `deleted_by` / `is_active`. **Soft delete
 only** — rows are flagged, never physically removed; read queries must
@@ -158,7 +194,12 @@ preference changes the plan.
 1. **Buildable rectangle**: plot length/width/facing minus mandatory
    setbacks (`compute_buildable_rect`, rules in `utils/constants.py`).
 2. **Room program**: flat list of `RoomInstance`s built from
-   bedroom/bathroom counts + optional/additional rooms, split across floors.
+   bedroom/bathroom counts + optional/additional rooms, split across floors
+   by `_build_duplex_room_program` or `_build_independent_room_program`
+   depending on `floor_type` (see below). `additional_rooms` is a validated
+   allowlist in `schemas/requirement.py` (`home_office`, `servant_room`,
+   `store_room`, `guest_room`, `gym`, `library`) — adding a new one means
+   updating that validator *and* `ROOM_LIBRARY` in `utils/constants.py`.
 3. **Vastu zone assignment**: each room greedily assigned to a preferred
    compass zone (N/NE/E/SE/S/SW/W/NW/C) in a 3x3 grid, load-balanced; a
    functional fallback order (`FALLBACK_ZONE_ORDER`) is used if Vastu is
@@ -174,13 +215,24 @@ preference changes the plan.
    up front (this and biasing zone assignment away from unnecessary
    3-cell rows are what prevent sliver/undersized rooms). Rooms that still
    can't fit their minimum are flagged `below_min_size` in the output
-   rather than silently shrunk further.
+   rather than silently shrunk further. Within a row/column, shares are not
+   pure weight share but a squarified blend (`_squarified_shares`) biased
+   toward each room's target aspect ratio — a lightly-weighted room forced
+   to span the full width of its siblings would otherwise get a sliver of
+   height to go with it. This trades exact weight-proportional area for
+   saner shapes; the `min` floor still applies on top, so total area used
+   and minimum-size guarantees are unaffected.
 5. **Parking**: carved from the ground-floor front setback, extending into
    the footprint if vehicles don't fit within the setback alone.
-6. **Staircase**: a fixed-width strip reserved at a consistent west/east
-   edge (multi-floor only) so it stacks identically across floors — in
-   duplex/multi-floor mode the staircase is enclosed inside the house
-   footprint, not tacked onto the exterior.
+6. **Staircase and veranda strips**: both are carved with
+   `geo.split_strip` *before* grid slicing, not placed as Vastu grid cells.
+   The staircase is a fixed-width strip at a consistent west/east edge
+   (multi-floor only) so it stacks identically across floors, enclosed
+   inside the house footprint rather than tacked onto the exterior; on the
+   ground floor it is intersected with the parking-receded outline so it
+   stays inside that floor's walls. The veranda is a full-width strip off
+   the front edge, so it always spans the facade and sits between the
+   entrance and every other room instead of landing as a corner sliver.
 7. **Walls, doors, windows, furniture** derived from final room rects:
    exterior outline + shared interior walls, an entrance door plus one
    internal door per room on its largest shared wall, windows on
@@ -189,12 +241,97 @@ preference changes the plan.
    sharing a wall wide enough for a doorway (widest wall first) — a tree,
    not a general graph, so every room has exactly the doors it needs and no
    redundant ones; this matters when editing geometry later (see below).
+8. **Site elements (ground floor only)**: these work in **plot**
+   coordinates, outside the building footprint. `compute_main_gate` opens a
+   driveway gate in the front boundary centered on the parking (falling
+   back to the entrance door, then the plot center); `compute_ramp` runs a
+   ramp outward from the entrance door *only* when `wheelchair_accessible`
+   is set, retrying a few sideways shifts to clear the parking rect and
+   returning `None` if it can't fit inside the plot. Neither is a room —
+   they live at `floor.main_gate` / `floor.ramp`, with
+   `meta.compound_wall_style` and `meta.gate_style` telling the frontend how
+   to draw the boundary (`siteIcons.ts` holds those glyphs, separate from
+   `furnitureIcons.ts`).
 
-Known simplification: every floor shares the same footprint (no
-upper-floor step-backs), except the "independent-floor duplex mode" noted
-in recent commits which allows floors to diverge.
+Note the signature: `generate_floor_plan(req)` is annotated `-> dict` but
+actually returns the tuple `(plan_data, total_built_up_area)`.
+
+**`floor_type` (`duplex` | `independent`)** changes the room program, not
+just the styling. `duplex` = one household across floors: shared
+living/kitchen downstairs, and only the ground floor gets a front door
+(upper floors are reached by the internal staircase). `independent` =
+every floor is its own self-contained unit off a shared staircase landing,
+so each floor gets its own living room, kitchen *and* its own
+`main_entrance` door. `is_independent_floors(req)` is the predicate — check
+it rather than reading `floor_type` directly, because it is also False for
+a single-floor plan regardless of the field's value.
+
+`wheelchair_accessible` likewise reaches further than the ramp: it also
+swaps the first ground-floor bathroom's type to `accessible_bathroom` in
+the room program, so it changes room sizing too.
+
+Known simplification: every floor otherwise shares the same footprint (no
+upper-floor step-backs).
+
+### `plan_data` shape
+
+The single JSON contract between the generator, every plan-editing
+endpoint, the SVG viewer, the 3D view, and undo/redo. Everything is in **feet**, in
+plot coordinates: `x` runs 0 (West) → `plot_width` (East), `y` runs
+0 (North) → `plot_length` (South), so `y` grows *southward*.
+
+```
+{ "meta": { plot_length, plot_width, unit, facing, floors, vastu_compliant,
+            compound_wall_style, gate_style, total_built_up_area,
+            buildable_footprint: {x,y,width,length},
+            # attached by the API layer, NOT by generate_floor_plan:
+            cost_estimate, boq, construction_timeline, far },
+  "floors": [ { floor_number, label, has_staircase,
+                outline: {x,y,width,length},
+                rooms:   [ {id, type, label, zone, x, y, width, length, area,
+                            below_min_size, furniture:[{type,x,y,w,l,rotation}]} ],
+                walls, doors, windows,
+                parking:   {x,y,width,length,capacity_cars,capacity_two_wheelers} | null,
+                ramp:      {x,y,width,length,side} | null,
+                main_gate: {x,y,width,side} | null } ] }
+```
+
+Shape traps worth knowing before you index into it:
+
+- **Rooms use `width`/`length`; every rect the generator passes around
+  internally uses `w`/`l`.** The rename happens at the serialization
+  boundary in `generate_floor_plan`, and `recompute_floor_geometry` maps
+  back the other way. Mixing the two silently produces `None`/`KeyError`.
+- **Doors are not uniform.** `{"type": "main_entrance", ...}` carries a
+  `wall` key; `{"type": "internal", ...}` carries `connects_to` instead and
+  has **no** `wall`. Code that reads `door["wall"]` unconditionally breaks
+  on internal doors.
+- **Furniture `w`/`l` is the *post-rotation* bounding box**, with
+  `rotation` stored separately — both the 2D icon renderer and
+  `FloorPlan3DView` must un-swap (`rotation % 180 !== 0`) to get the
+  natural pose. The generator always emits `rotation: 0`; non-zero values
+  only ever come from the frontend furniture editor.
+- All coordinates are **rounded to 2 decimals** on the way out. That
+  rounding is exactly why re-derived geometry needs a loosened tolerance —
+  see `.claude/rules/room-geometry.md`.
+- `cost_estimate`/`boq`/`construction_timeline`/`far` are *derived* and
+  live only in the API layer: the generate route in
+  `api/v1/requirements.py` attaches them on first build, and
+  `_recalculate_estimates` in `api/v1/floorplans.py` re-derives them after
+  every geometry edit. `generate_floor_plan` itself never sets them, so a
+  plan built by calling the service directly (a smoke script, a test) has
+  no `meta.cost_estimate` at all.
 
 ### Manual editing after generation
+
+`plan_data` is a plain SQLAlchemy `JSON` column with no mutation tracking,
+so **mutating it in place does not mark the row dirty**. All seven routes
+in `api/v1/floorplans.py` that write it (furniture, rooms, plan-data
+restore, attached-bathroom add/remove, replace, parking) call
+`flag_modified(plan, "plan_data")` before `db.commit()`; omit it and the
+response still shows the edit — it's served from the live in-session
+object — while the database silently keeps the old plan, so the bug only
+surfaces on the next request.
 
 Four endpoints mutate an existing `FloorPlan.plan_data` in place rather
 than regenerating from scratch, all funneling through the same two
