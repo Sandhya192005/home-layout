@@ -59,26 +59,34 @@ def _routes_through_private(floor):
 
 
 # Two scenarios are known to still fail, both with the kitchen sitting behind
-# the master bedroom. Door ordering cannot rescue them: on those tight plots
-# the kitchen's only wall wide enough for a doorway is the one it shares with
-# the master bedroom, so there is no alternative edge to prefer. Fixing them
-# needs a geometry change -- a reserved corridor strip, or zone assignment
-# that stops placing the kitchen in a pocket -- not a better door tree. Drop
-# the marker when that lands.
-_NEEDS_CORRIDOR = pytest.mark.xfail(
-    reason="kitchen's only wide-enough wall is shared with the master bedroom; needs a corridor, not door ordering",
+# the master bedroom. Door ordering cannot rescue them: the kitchen's only
+# doorway-width wall is the one it shares with the master bedroom, so there
+# is no alternative edge to prefer.
+#
+# The cause is in the grid partition, not the door tree. A grid row holding a
+# single private room expands to the floor's full width and becomes a wall
+# across the house -- in the 35x50 case the master bedroom spans all 25.5ft,
+# stranding the kitchen behind it. A reserved corridor strip does NOT fix
+# this and was tried and reverted: an edge strip only reaches the edge column
+# of each row, never a room stranded behind a full-width one, and it measured
+# 16 bad routes before and 16 after while costing 3.5ft of frontage.
+#
+# The real fix is in `_assign_zones`/`_layout_grid`: stop a row ending up
+# with only private occupants. Drop this marker when that lands.
+_NEEDS_ZONE_FIX = pytest.mark.xfail(
+    reason="a full-width private row walls the kitchen off; needs zone assignment, not door ordering or a corridor",
 )
 
 SCENARIOS = [
     pytest.param(dict(plot_length=40, plot_width=30, facing="north", bedrooms=2, bathrooms=2, floors=1),
-                 marks=_NEEDS_CORRIDOR),
+                 marks=_NEEDS_ZONE_FIX),
     pytest.param(dict(plot_length=55, plot_width=40, facing="north", bedrooms=3, bathrooms=3, floors=2)),
     pytest.param(dict(plot_length=45, plot_width=25, facing="west", bedrooms=2, bathrooms=2, floors=2)),
     pytest.param(dict(plot_length=45, plot_width=22, facing="north", bedrooms=3, bathrooms=3, floors=3)),
     pytest.param(dict(plot_length=60, plot_width=50, facing="south", bedrooms=4, bathrooms=4, floors=2)),
     pytest.param(dict(plot_length=50, plot_width=35, facing="north", bedrooms=3, bathrooms=3, floors=1,
                       vastu_compliant=True),
-                 marks=_NEEDS_CORRIDOR),
+                 marks=_NEEDS_ZONE_FIX),
 ]
 
 
