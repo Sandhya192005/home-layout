@@ -51,6 +51,9 @@ const GOLD = 0xd4af37;
 const PLANT_GREEN = 0x4f7d43;
 const POT_COLOR = 0xb5651d;
 
+const STAIR_STEP_COLOR = 0xcac4b8;
+const STAIR_RAIL_COLOR = METAL;
+
 interface MatFinish {
   roughness?: number;
   metalness?: number;
@@ -560,6 +563,168 @@ function buildBikeMesh(w: number, h: number): THREE.Group {
   return group;
 }
 
+const STAIR_STEP_FINISH: MatFinish = { roughness: 0.88, metalness: 0.04 };
+const STAIR_RAIL_FINISH: MatFinish = { roughness: 0.3, metalness: 0.6 };
+
+/** Places one vertical baluster/newel post. `run` is the along-the-flight
+ * coordinate and `cross` the across-the-flight coordinate; `runAxisIsX`
+ * says which world axis "run" maps to (see buildStaircaseGroup). */
+function addStairPost(
+  group: THREE.Group,
+  run: number,
+  baseHeight: number,
+  cross: number,
+  railHeight: number,
+  runAxisIsX: boolean
+): void {
+  const x = runAxisIsX ? run : cross;
+  const z = runAxisIsX ? cross : run;
+  addCylinder(group, 0.045, 0.045, railHeight, STAIR_RAIL_COLOR, x, baseHeight + railHeight / 2, z, STAIR_RAIL_FINISH);
+}
+
+/** Builds a straight-flight 3D staircase -- individual solid tread/riser
+ * blocks (each solid from the floor up to its own tread, so adjacent
+ * non-overlapping run segments read as a proper stepped silhouette with no
+ * separate stringer support needed), a deeper landing at the top flush
+ * with the floor above, and handrails with posts on both sides -- filling
+ * the given room rect and climbing exactly `floorHeight`. Replaces the
+ * flat floor inset the staircase room would otherwise get.
+ *
+ * Local coordinates: x/z absolute in the room's own plot-plane position
+ * (matching every other mesh in this file -- the caller only offsets the
+ * returned group's Y by that floor's baseY), y relative to this floor (0 =
+ * this floor's level, floorHeight = the floor above's level).
+ *
+ * Orientation is derived from the rect's own long axis -- plan_data has no
+ * separate "direction" field for a staircase, and `PUT .../rooms` forbids
+ * resizing a staircase specifically so it stays aligned across floors, so
+ * every floor's flight climbs the same physical direction automatically. */
+function buildStaircaseGroup(rect: { x: number; y: number; w: number; l: number }, floorHeight: number): THREE.Group {
+  const group = new THREE.Group();
+  if (floorHeight <= 0) return group;
+
+  // Keep every step/rail inset from the room's own walls.
+  const clearance = 0.15;
+  const runAxisIsX = rect.w >= rect.l;
+  const totalRun = (runAxisIsX ? rect.w : rect.l) - clearance * 2;
+  const flightWidth = (runAxisIsX ? rect.l : rect.w) - clearance * 2;
+  if (totalRun <= 1.5 || flightWidth <= 1.5) return group; // degenerate rect -- bail out safely
+
+  const runStart = (runAxisIsX ? rect.x : rect.y) + clearance;
+  const crossCenter = runAxisIsX ? rect.y + rect.l / 2 : rect.x + rect.w / 2;
+
+  const idealRiser = 0.583; // ~7in, standard residential riser height
+  const numSteps = THREE.MathUtils.clamp(Math.round(floorHeight / idealRiser), 10, 24);
+  const riserHeight = floorHeight / numSteps;
+
+  const idealTread = 0.917; // ~11in, standard residential tread depth
+  let landingDepth = THREE.MathUtils.clamp(totalRun * 0.22, 2.0, 4);
+  let treadDepth = numSteps > 1 ? (totalRun - landingDepth) / (numSteps - 1) : totalRun - landingDepth;
+  if (treadDepth > idealTread) {
+    treadDepth = idealTread;
+  } else if (treadDepth < 0.35) {
+    // Room too tight for the ideal landing depth -- shrink the landing first.
+    treadDepth = 0.35;
+    landingDepth = Math.max(0.6, totalRun - treadDepth * (numSteps - 1));
+  }
+  const usedRun = treadDepth * (numSteps - 1) + landingDepth;
+  const startOffset = Math.max(0, (totalRun - usedRun) / 2); // center the flight if the room runs longer than needed
+
+  function addStepBlock(runFrom: number, runSize: number, height: number): void {
+    const runCenter = runStart + runFrom + runSize / 2;
+    if (runAxisIsX) {
+      addBox(group, runSize, height, flightWidth, STAIR_STEP_COLOR, runCenter, height / 2, crossCenter, 1, STAIR_STEP_FINISH);
+    } else {
+      addBox(group, flightWidth, height, runSize, STAIR_STEP_COLOR, crossCenter, height / 2, runCenter, 1, STAIR_STEP_FINISH);
+    }
+  }
+
+  for (let i = 0; i < numSteps - 1; i++) {
+    addStepBlock(startOffset + i * treadDepth, treadDepth, (i + 1) * riserHeight);
+  }
+  // Landing: a deeper final "step", flush with the floor above.
+  addStepBlock(startOffset + (numSteps - 1) * treadDepth, landingDepth, floorHeight);
+
+  // Handrails -- uniform steps mean the tread-nose line is perfectly
+  // straight, so one sloped rail per side (plus a level rail across the
+  // landing) covers every step without needing a segment per tread.
+  const railHeight = 2.8;
+  const railInset = 0.08;
+  const flightRunEnd = startOffset + (numSteps - 1) * treadDepth;
+  const landingRunEnd = flightRunEnd + landingDepth;
+  const slopeRun = flightRunEnd - startOffset;
+  const slopeLen = Math.hypot(slopeRun, floorHeight);
+  const slopeAngle = Math.atan2(floorHeight, slopeRun);
+
+  for (const side of [-1, 1]) {
+    const cross = crossCenter + side * (flightWidth / 2 - railInset);
+
+    const slopeMidRun = runStart + (startOffset + flightRunEnd) / 2;
+    const slopeMidHeight = floorHeight / 2 + railHeight;
+    const rail = runAxisIsX
+      ? addBox(group, slopeLen, 0.08, 0.08, STAIR_RAIL_COLOR, slopeMidRun, slopeMidHeight, cross, 1, STAIR_RAIL_FINISH)
+      : addBox(group, 0.08, 0.08, slopeLen, STAIR_RAIL_COLOR, cross, slopeMidHeight, slopeMidRun, 1, STAIR_RAIL_FINISH);
+    if (runAxisIsX) rail.rotation.z = slopeAngle;
+    else rail.rotation.x = -slopeAngle;
+
+    const landingRailLen = landingRunEnd - flightRunEnd;
+    const landingMidRun = runStart + (flightRunEnd + landingRunEnd) / 2;
+    if (runAxisIsX) {
+      addBox(group, landingRailLen, 0.08, 0.08, STAIR_RAIL_COLOR, landingMidRun, floorHeight + railHeight, cross, 1, STAIR_RAIL_FINISH);
+    } else {
+      addBox(group, 0.08, 0.08, landingRailLen, STAIR_RAIL_COLOR, cross, floorHeight + railHeight, landingMidRun, 1, STAIR_RAIL_FINISH);
+    }
+
+    // Posts evenly spaced along the slope, plus one at the landing's far end.
+    const postCount = Math.max(2, Math.round(numSteps / 3));
+    for (let p = 0; p <= postCount; p++) {
+      const t = p / postCount;
+      addStairPost(group, runStart + startOffset + t * slopeRun, t * floorHeight, cross, railHeight, runAxisIsX);
+    }
+    addStairPost(group, runStart + landingRunEnd, floorHeight, cross, railHeight, runAxisIsX);
+  }
+
+  return group;
+}
+
+/** Adds a floor slab as a "picture frame" of up to 4 boxes around a
+ * rectangular stairwell opening (rather than one solid box), so the flight
+ * of stairs rising from the floor below actually connects through to this
+ * floor instead of terminating against a solid ceiling. `opening` is
+ * assumed to be fully inside `outline` (true for a staircase rect, which
+ * is always carved from the floor's own footprint). */
+function addSlabWithOpening(
+  scene: THREE.Scene,
+  outline: { x: number; y: number; width: number; length: number },
+  opening: { x: number; y: number; w: number; l: number },
+  baseY: number
+): void {
+  const material = new THREE.MeshStandardMaterial({ color: SLAB_COLOR, roughness: 0.9 });
+  const centerY = baseY - SLAB_THICKNESS / 2;
+
+  const left = Math.max(0, opening.x - outline.x);
+  const right = Math.max(0, outline.x + outline.width - (opening.x + opening.w));
+  const top = Math.max(0, opening.y - outline.y);
+  const bottom = Math.max(0, outline.y + outline.length - (opening.y + opening.l));
+
+  function addPiece(w: number, d: number, cx: number, cz: number): void {
+    if (w <= 0.01 || d <= 0.01) return;
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, SLAB_THICKNESS, d), material);
+    mesh.position.set(cx, centerY, cz);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+  }
+
+  // West/east strips run the outline's full length; north/south strips
+  // then only need to fill the middle column (the opening's own width),
+  // since the west/east strips already cover those corners.
+  addPiece(left, outline.length, outline.x + left / 2, outline.y + outline.length / 2);
+  addPiece(right, outline.length, outline.x + outline.width - right / 2, outline.y + outline.length / 2);
+  addPiece(opening.w, top, opening.x + opening.w / 2, outline.y + top / 2);
+  addPiece(opening.w, bottom, opening.x + opening.w / 2, outline.y + outline.length - bottom / 2);
+}
+
 function makeLabelSprite(text: string): THREE.Sprite {
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d")!;
@@ -597,7 +762,14 @@ export default function FloorPlan3DView({ plan }: { plan: PlanData }) {
     const floorsToRender =
       floorFilter === "all" ? plan.floors : plan.floors.filter((f) => f.floor_number === floorFilter);
     const baseFloorNumber = floorsToRender[0]?.floor_number ?? 0;
-    const isTopFloorVisible = floorsToRender[floorsToRender.length - 1]?.floor_number === plan.floors[plan.floors.length - 1].floor_number;
+    // The generator gives every floor its own "staircase" room, including
+    // the top one -- but the top floor's is just the arrival landing (there's
+    // nothing above it to climb to), so it should render as a flat landing,
+    // never a full flight rising into the roof. This must be compared
+    // against the whole plan's top floor, not floorsToRender's -- an
+    // isolated single-floor view still needs the right answer.
+    const topFloorNumber = plan.floors[plan.floors.length - 1].floor_number;
+    const isTopFloorVisible = floorsToRender[floorsToRender.length - 1]?.floor_number === topFloorNumber;
 
     const scene = new THREE.Scene();
     const skyCanvas = document.createElement("canvas");
@@ -676,19 +848,31 @@ export default function FloorPlan3DView({ plan }: { plan: PlanData }) {
     plotEdges.position.set(centerX, 0.01, centerZ);
     scene.add(plotEdges);
 
+    // Tracks the staircase footprint of the previously-rendered floor (if
+    // any) so the *next* floor's slab can have a matching stairwell
+    // opening cut into it -- the flight rising from floor N through to
+    // floor N+1 needs an opening in floor N+1's slab, not its own.
+    let previousFloorStaircaseRect: { x: number; y: number; w: number; l: number } | null = null;
+
     for (const floor of floorsToRender) {
       const baseY = (floor.floor_number - baseFloorNumber) * FLOOR_HEIGHT;
       const o = floor.outline;
 
-      // Floor slab
-      const slab = new THREE.Mesh(
-        new THREE.BoxGeometry(o.width, SLAB_THICKNESS, o.length),
-        new THREE.MeshStandardMaterial({ color: SLAB_COLOR, roughness: 0.9 })
-      );
-      slab.position.set(o.x + o.width / 2, baseY - SLAB_THICKNESS / 2, o.y + o.length / 2);
-      slab.castShadow = true;
-      slab.receiveShadow = true;
-      scene.add(slab);
+      // Floor slab -- solid, unless the floor below has a staircase rising
+      // into this one, in which case it's built as a frame around a
+      // stairwell opening so the flight actually connects between floors.
+      if (previousFloorStaircaseRect) {
+        addSlabWithOpening(scene, o, previousFloorStaircaseRect, baseY);
+      } else {
+        const slab = new THREE.Mesh(
+          new THREE.BoxGeometry(o.width, SLAB_THICKNESS, o.length),
+          new THREE.MeshStandardMaterial({ color: SLAB_COLOR, roughness: 0.9 })
+        );
+        slab.position.set(o.x + o.width / 2, baseY - SLAB_THICKNESS / 2, o.y + o.length / 2);
+        slab.castShadow = true;
+        slab.receiveShadow = true;
+        scene.add(slab);
+      }
 
       // Rooms: colored floor inset + label
       for (const room of floor.rooms) {
@@ -703,6 +887,15 @@ export default function FloorPlan3DView({ plan }: { plan: PlanData }) {
         roomFloor.position.set(room.x + room.width / 2, baseY + 0.04, room.y + room.length / 2);
         roomFloor.receiveShadow = true;
         scene.add(roomFloor);
+
+        if (room.type === "staircase" && floor.floor_number !== topFloorNumber) {
+          const stairGroup = buildStaircaseGroup(
+            { x: room.x, y: room.y, w: room.width, l: room.length },
+            FLOOR_HEIGHT
+          );
+          stairGroup.position.y = baseY;
+          scene.add(stairGroup);
+        }
 
         if (Math.min(room.width, room.length) >= 4) {
           const label = makeLabelSprite(room.label);
@@ -816,6 +1009,11 @@ export default function FloorPlan3DView({ plan }: { plan: PlanData }) {
           }
         }
       }
+
+      const thisFloorStaircase = floor.rooms.find((r) => r.type === "staircase");
+      previousFloorStaircaseRect = thisFloorStaircase
+        ? { x: thisFloorStaircase.x, y: thisFloorStaircase.y, w: thisFloorStaircase.width, l: thisFloorStaircase.length }
+        : null;
     }
 
     // Gable roof on top of the highest floor: two sloped panels meeting at a
