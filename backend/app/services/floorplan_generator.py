@@ -566,9 +566,124 @@ def _slice_columns(
             room.below_min = rect["w"] < room.min_w - 0.5 or rect["l"] < room.min_l - 0.5
 
 
+PRIVATE_ROOM_TYPES = {
+    "bedroom", "master_bedroom", "guest_room", "servant_room", "bathroom", "accessible_bathroom",
+}
+
+
+def _public_islands(rooms: list[RoomInstance]) -> int:
+    """How many disconnected groups the floor's shared rooms fall into once
+    the private ones are taken out of the picture.
+
+    `_layout_grid` slices the floor into full-width horizontal bands, so a
+    band of nothing but bedrooms and bathrooms cuts the plan in two and the
+    shared rooms beyond it can only be reached through someone's bedroom.
+    Counting islands measures that directly, rather than guessing at it from
+    the shape of the bands: 1 means every shared room reaches every other
+    without passing through a private one, which is the goal."""
+    public = [r for r in rooms if r.rect and r.room_type not in PRIVATE_ROOM_TYPES]
+    if len(public) <= 1:
+        return len(public)
+
+    parent = {r.room_id: r.room_id for r in public}
+
+    def find(rid: str) -> str:
+        while parent[rid] != rid:
+            parent[rid] = parent[parent[rid]]
+            rid = parent[rid]
+        return rid
+
+    for i, a in enumerate(public):
+        for b in public[i + 1:]:
+            shared = geo.shared_segment(a.rect, b.rect, tolerance=0.05)
+            if shared and geo.segment_length(shared[2]) >= DOOR_WIDTH_INTERNAL:
+                parent[find(a.room_id)] = find(b.room_id)
+    return len({find(r.room_id) for r in public})
+
+
+def _layout_score(rooms: list[RoomInstance], buildable: dict) -> tuple[int, int]:
+    """Lower is better: split-up shared rooms first, then rooms squeezed below
+    their minimum. Ordering it this way means a swap is only accepted if it
+    reconnects shared space, and among equally-connected arrangements the
+    roomiest one wins."""
+    return (_public_islands(rooms), sum(1 for r in rooms if r.rect and r.below_min))
+
+
+def _cell_containing(cells: dict[tuple[int, int], list[RoomInstance]], room: RoomInstance):
+    for cell, members in cells.items():
+        for i, member in enumerate(members):
+            if member.room_id == room.room_id:
+                return cell, i
+    return None, None
+
+
+def _swap_cells(cells: dict[tuple[int, int], list[RoomInstance]], a: RoomInstance, b: RoomInstance) -> None:
+    (cell_a, i), (cell_b, j) = _cell_containing(cells, a), _cell_containing(cells, b)
+    cells[cell_a][i], cells[cell_b][j] = b, a
+    a.zone, b.zone = ZONE_GRID[cell_b[0]][cell_b[1]], ZONE_GRID[cell_a[0]][cell_a[1]]
+
+
+def _repair_wall_bands(
+    rooms: list[RoomInstance], cells: dict[tuple[int, int], list[RoomInstance]], buildable: dict
+) -> None:
+    """Trade a private room for a non-private one so the floor's shared rooms
+    reconnect, when a band of nothing but bedrooms and bathrooms has cut them
+    in two.
+
+    Zone assignment is greedy per room and has no view of the bands its
+    choices will produce, so rather than trying to predict them this re-runs
+    the real layout for each candidate swap and keeps the best result. A swap
+    is kept only if it strictly improves `_layout_score`, so a floor whose
+    shared rooms already connect is never touched and Vastu placement is only
+    disturbed where it was actively splitting the house in two."""
+    if _layout_score(rooms, buildable)[0] <= 1:
+        return
+
+    def snapshot():
+        return [(r, r.rect, r.zone, r.below_min) for r in rooms]
+
+    def restore(snap):
+        for room, rect, zone, below in snap:
+            room.rect, room.zone, room.below_min = rect, zone, below
+
+    best_snapshot, best_score = snapshot(), _layout_score(rooms, buildable)
+    # An entrance room is pinned to the street-facing side and a staircase to
+    # a fixed edge, so neither can be traded away to fix circulation.
+    swappable = [
+        r for r in rooms
+        if r.room_type not in PRIVATE_ROOM_TYPES
+        and r.room_type not in ENTRANCE_ROOM_TYPES
+        and r.room_type not in ("staircase",)
+    ]
+
+    # Give up the least important private room first.
+    privates = sorted(
+        (r for r in rooms if r.rect and r.room_type in PRIVATE_ROOM_TYPES),
+        key=lambda r: (r.priority, r.weight),
+    )
+    for private in privates:
+        for other in swappable:
+            _swap_cells(cells, private, other)
+            _layout_grid(buildable, cells)
+            score = _layout_score(rooms, buildable)
+            if score < best_score:
+                best_snapshot, best_score = snapshot(), score
+            else:
+                _swap_cells(cells, other, private)  # put them back
+            if best_score[0] <= 1:
+                restore(best_snapshot)
+                return  # shared rooms all reach each other; done
+
+    # Restore the best arrangement's geometry directly. Re-running the layout
+    # here would overwrite it from whatever state `cells` was left in, and
+    # nothing downstream reads `cells` -- only the rooms' own rects.
+    restore(best_snapshot)
+
+
 def layout_floor(rooms: list[RoomInstance], buildable: dict, vastu: bool) -> None:
     cells = _assign_zones(rooms, vastu)
     _layout_grid(buildable, cells)
+    _repair_wall_bands(rooms, cells, buildable)
 
 
 # ---------------------------------------------------------------------------

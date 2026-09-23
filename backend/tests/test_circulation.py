@@ -58,35 +58,19 @@ def _routes_through_private(floor):
     return bad
 
 
-# Two scenarios are known to still fail, both with the kitchen sitting behind
-# the master bedroom. Door ordering cannot rescue them: the kitchen's only
-# doorway-width wall is the one it shares with the master bedroom, so there
-# is no alternative edge to prefer.
-#
-# The cause is in the grid partition, not the door tree. A grid row holding a
-# single private room expands to the floor's full width and becomes a wall
-# across the house -- in the 35x50 case the master bedroom spans all 25.5ft,
-# stranding the kitchen behind it. A reserved corridor strip does NOT fix
-# this and was tried and reverted: an edge strip only reaches the edge column
-# of each row, never a room stranded behind a full-width one, and it measured
-# 16 bad routes before and 16 after while costing 3.5ft of frontage.
-#
-# The real fix is in `_assign_zones`/`_layout_grid`: stop a row ending up
-# with only private occupants. Drop this marker when that lands.
-_NEEDS_ZONE_FIX = pytest.mark.xfail(
-    reason="a full-width private row walls the kitchen off; needs zone assignment, not door ordering or a corridor",
-)
-
+# These six once split into pass/fail: the 30x40 and 35x50 plans put the
+# kitchen behind the master bedroom and no door ordering could rescue them,
+# because a band of nothing but private rooms spans the floor's full width
+# and walls the house in two. `_repair_wall_bands` now trades a private room
+# out of such a band, and all six pass.
 SCENARIOS = [
-    pytest.param(dict(plot_length=40, plot_width=30, facing="north", bedrooms=2, bathrooms=2, floors=1),
-                 marks=_NEEDS_ZONE_FIX),
+    pytest.param(dict(plot_length=40, plot_width=30, facing="north", bedrooms=2, bathrooms=2, floors=1)),
     pytest.param(dict(plot_length=55, plot_width=40, facing="north", bedrooms=3, bathrooms=3, floors=2)),
     pytest.param(dict(plot_length=45, plot_width=25, facing="west", bedrooms=2, bathrooms=2, floors=2)),
     pytest.param(dict(plot_length=45, plot_width=22, facing="north", bedrooms=3, bathrooms=3, floors=3)),
     pytest.param(dict(plot_length=60, plot_width=50, facing="south", bedrooms=4, bathrooms=4, floors=2)),
     pytest.param(dict(plot_length=50, plot_width=35, facing="north", bedrooms=3, bathrooms=3, floors=1,
-                      vastu_compliant=True),
-                 marks=_NEEDS_ZONE_FIX),
+                      vastu_compliant=True)),
 ]
 
 
@@ -111,3 +95,28 @@ def test_kitchen_and_living_are_never_reached_through_a_private_room(overrides):
 # test_attached_bathroom.py::test_add_attached_bathroom_shrinks_room_and_adds_bathroom.
 # That test is what caught `_doorway_cost` initially ranking the ensuite pair
 # worst of all (private + bathroom) and sending its only door elsewhere.
+
+
+@pytest.mark.parametrize("overrides", SCENARIOS)
+def test_shared_rooms_are_never_split_into_islands(overrides):
+    """The invariant `_repair_wall_bands` exists to hold: with every private
+    room taken out of the picture, the shared rooms left on a floor still
+    reach each other. More than one island means a band of bedrooms and
+    bathrooms has cut the floor in two, which is what puts a kitchen behind
+    someone's bedroom."""
+    from app.services.floorplan_generator import _public_islands, RoomInstance
+
+    plan, _ = generate_floor_plan(RequirementCreate(**overrides))
+    for floor in plan["floors"]:
+        rooms = [
+            RoomInstance(
+                room_id=r["id"], room_type=r["type"], label=r["label"], weight=0, priority=0,
+                zones=[], habitable=True, min_w=0, min_l=0, furniture=[], floor_index=0,
+                rect={"x": r["x"], "y": r["y"], "w": r["width"], "l": r["length"]},
+            )
+            for r in floor["rooms"]
+        ]
+        assert _public_islands(rooms) <= 1, (
+            f"floor {floor['floor_number']} shared rooms split into islands: "
+            f"{[r['label'] for r in floor['rooms']]}"
+        )
