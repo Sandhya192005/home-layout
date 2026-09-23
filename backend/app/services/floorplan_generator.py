@@ -704,13 +704,44 @@ def compute_parking(
         return None, base_rect, base_rect, full_rect
 
     lateral_axis = "w" if facing in ("north", "south") else "l"
-    depth_needed = CAR_PARKING_SIZE["l"] if cars > 0 else TWO_WHEELER_PARKING_SIZE["l"]
-    width_needed = cars * CAR_PARKING_SIZE["w"] + two_wheelers * TWO_WHEELER_PARKING_SIZE["w"]
-    width_needed += max(cars + two_wheelers - 1, 0) * 1.0  # gaps between vehicles
+    depth_axis = "l" if facing in ("north", "south") else "w"
     width_available = base_rect[lateral_axis]
-    width_needed = min(width_needed, width_available * 0.7)
 
+    def _demand(nose_in: bool) -> tuple[float, float]:
+        """(depth into the plot, span along the street) the vehicles need,
+        parked nose-in to the street or parallel alongside it."""
+        car = (CAR_PARKING_SIZE["l"], CAR_PARKING_SIZE["w"]) if nose_in else (CAR_PARKING_SIZE["w"], CAR_PARKING_SIZE["l"])
+        bike = (
+            (TWO_WHEELER_PARKING_SIZE["l"], TWO_WHEELER_PARKING_SIZE["w"]) if nose_in
+            else (TWO_WHEELER_PARKING_SIZE["w"], TWO_WHEELER_PARKING_SIZE["l"])
+        )
+        depth = car[0] if cars > 0 else bike[0]
+        span = cars * car[1] + two_wheelers * bike[1] + max(cars + two_wheelers - 1, 0) * 1.0  # gaps
+        return depth, span
+
+    # The depth carve must not eat the house. Nose-in parking needs a car's
+    # full 17ft length as depth, which on a narrow plot entered from its long
+    # side can swallow the entire buildable width -- a 45x22 east-facing plot
+    # has only 14ft of buildable width, so a 12ft carve left a 2ft strip for
+    # every room, and the layout then overflowed the outline entirely.
+    # Parking parallel to the street needs only the car's width, which is
+    # what such a plot does in reality, so try that before giving up ground.
+    max_extra = base_rect[depth_axis] * 0.5
+    depth_needed, width_needed = _demand(nose_in=True)
+    if max(0.0, depth_needed - front_sb) > max_extra:
+        parallel_depth, parallel_span = _demand(nose_in=False)
+        if max(0.0, parallel_depth - front_sb) <= max_extra:
+            depth_needed, width_needed = parallel_depth, parallel_span
+
+    width_needed = min(width_needed, width_available * 0.7)
     extra_depth = max(0.0, depth_needed - front_sb)
+    if extra_depth > max_extra:
+        # Neither orientation fits. Keep half the footprint for the house and
+        # draw the parking at the depth actually available rather than a
+        # fictional one -- `validate_requirement` already warns that a plot
+        # this tight can't really take the vehicles asked for.
+        extra_depth = max_extra
+        depth_needed = front_sb + extra_depth
     front_edge = _front_edge(facing)
     outline = geo.shrink_edge(base_rect, front_edge, extra_depth)
     room_rect = outline
