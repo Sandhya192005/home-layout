@@ -76,6 +76,10 @@ class RoomInstance:
     zone: str | None = None
     rect: dict | None = None
     below_min: bool = False
+    # Set only on a bathroom carved out of a parent room by
+    # `add_attached_bathroom`; the id of that parent. Door-building treats
+    # this pair as inseparable -- see `_doorway_cost`.
+    attached_to: str | None = None
 
 
 def _setback(dimension: float, kind: str) -> float:
@@ -737,6 +741,40 @@ def _build_windows(rooms: list[RoomInstance], outline: dict) -> list[dict]:
     return windows
 
 
+# How acceptable it is for a room to act as a *through-route* to other rooms.
+# `_build_doors` grows its spanning tree cheapest-edge-first, so ranking
+# circulation space low and private rooms high builds the tree's trunk out of
+# the hall/living/landing chain and leaves bedrooms and bathrooms hanging off
+# it as leaves -- which is what stops a plan whose only route to the kitchen
+# runs through the master bedroom.
+CIRCULATION_RANK = {
+    "veranda": 0, "foyer": 0, "staircase": 0, "living_room": 0,
+    "dining_room": 1,
+    "kitchen": 2, "utility": 2, "store_room": 2, "pooja_room": 2,
+    "study_room": 2, "home_office": 2, "gym": 2, "library": 2, "balcony": 2,
+    "bedroom": 5, "master_bedroom": 5, "guest_room": 5, "servant_room": 5,
+    # A bathroom should never be a corridor if any alternative exists.
+    "bathroom": 9, "accessible_bathroom": 9,
+}
+DEFAULT_CIRCULATION_RANK = 3
+
+
+def _doorway_cost(a: RoomInstance, b: RoomInstance) -> int:
+    """Privacy cost of routing through this pair. Summing both endpoints means
+    a public-to-public link is far cheaper than anything touching a bedroom or
+    bathroom, without ever making an edge unusable -- a room whose only
+    neighbour is a bedroom still gets its door."""
+    # An attached bathroom exists *because* it was carved out of its parent
+    # room to be that room's ensuite, so its door belongs to that parent and
+    # nowhere else. On rank alone this pair scores worst of all (private +
+    # bathroom), which would send the ensuite's only door off to whatever
+    # neighbour happened to be cheaper -- so it is pinned cheapest instead.
+    if a.attached_to == b.room_id or b.attached_to == a.room_id:
+        return -1
+    return (CIRCULATION_RANK.get(a.room_type, DEFAULT_CIRCULATION_RANK)
+            + CIRCULATION_RANK.get(b.room_type, DEFAULT_CIRCULATION_RANK))
+
+
 def _build_doors(
     rooms: list[RoomInstance], outline: dict, facing: str, entrance_room_id: str | None, tolerance: float = geo.EPS
 ) -> list[dict]:
@@ -765,11 +803,18 @@ def _build_doors(
             if length >= DOOR_WIDTH_INTERNAL:
                 candidates.append((length, seg, a, b))
 
-    # Connect every room into a single spanning tree (Kruskal's, widest wall
-    # first) instead of letting each room pick only its own single best
-    # neighbor -- that greedy approach could silently leave a whole cluster of
-    # rooms (e.g. a bedroom wing) with doors only to each other and no route
-    # at all back to the living room / rest of the house.
+    # Connect every room into a single spanning tree (Kruskal's) instead of
+    # letting each room pick only its own single best neighbor -- that greedy
+    # approach could silently leave a whole cluster of rooms (e.g. a bedroom
+    # wing) with doors only to each other and no route at all back to the
+    # living room / rest of the house.
+    #
+    # Edges are taken cheapest-privacy-cost first (see _doorway_cost), and
+    # only then widest-wall first within an equal cost. Ordering alone decides
+    # which walls get the doors; every candidate edge is still considered, so
+    # the tree still spans every room exactly as it did when the sort was on
+    # width alone -- a room with only one possible neighbour still gets that
+    # door however private that neighbour is.
     parent = {r.room_id: r.room_id for r in rects}
 
     def find(room_id: str) -> str:
@@ -778,7 +823,7 @@ def _build_doors(
             room_id = parent[room_id]
         return room_id
 
-    for length, seg, a, b in sorted(candidates, key=lambda c: -c[0]):
+    for length, seg, a, b in sorted(candidates, key=lambda c: (_doorway_cost(c[2], c[3]), -c[0])):
         root_a, root_b = find(a.room_id), find(b.room_id)
         if root_a == root_b:
             continue
@@ -1005,6 +1050,7 @@ def recompute_floor_geometry(floor: dict, facing: str) -> None:
             room_id=rd["id"], room_type=rd["type"], label=rd["label"], weight=0, priority=0,
             zones=[], habitable=meta["habitable"], min_w=meta["min_w"], min_l=meta["min_l"],
             furniture=[], floor_index=0, zone=rd.get("zone"), rect=rect,
+            attached_to=rd.get("attached_to"),
         )
         instance.below_min = rect["w"] < instance.min_w - 0.5 or rect["l"] < instance.min_l - 0.5
         room_instances.append(instance)
